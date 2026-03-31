@@ -1,0 +1,46 @@
+{% extends "accounts/base.html" %}
+
+{% block title %}Login | LogSight{% endblock %}
+
+{% block content %}
+  <div class="space-y-6">
+    <div>
+      <h1 class="text-2xl font-semibold tracking-tight text-slate-950">Welcome back</h1>
+      <p class="mt-2 text-sm text-slate-600">Sign in to access your datasets, analytics, and log viewer.</p>
+    </div>
+
+    <form method="post" class="space-y-4">
+      {% csrf_token %}
+      {% if form.non_field_errors %}
+        <div class="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {% for error in form.non_field_errors %}{{ error }}{% endfor %}
+        </div>
+      {% endif %}
+
+      <div>
+        <label for="{{ form.username.id_for_label }}" class="mb-1 block text-sm font-medium text-slate-700">Username</label>
+        {{ form.username }}
+        {% if form.username.errors %}
+          <p class="mt-1 text-sm text-red-600">{{ form.username.errors|join:", " }}</p>
+        {% endif %}
+      </div>
+
+      <div>
+        <label for="{{ form.password.id_for_label }}" class="mb-1 block text-sm font-medium text-slate-700">Password</label>
+        {{ form.password }}
+        {% if form.password.errors %}
+          <p class="mt-1 text-sm text-red-600">{{ form.password.errors|join:", " }}</p>
+        {% endif %}
+      </div>
+
+      <button type="submit" class="w-full rounded-xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-indigo-500">
+        Login
+      </button>
+    </form>
+
+    <p class="text-sm text-slate-600">
+      Don’t have an account?
+      <a href="{% url 'accounts:register' %}" class="font-medium text-indigo-600 hover:text-indigo-500">Create one</a>
+    </p>
+  </div>
+{% endblock %}

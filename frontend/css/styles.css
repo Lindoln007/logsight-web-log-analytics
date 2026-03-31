@@ -1,0 +1,371 @@
+/* Log Sight — custom animations & polish (Tailwind handles layout) */
+
+:root {
+  --ls-ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --ls-page-duration: 0.35s;
+  --ls-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ls-panel-shadow: 0 20px 60px -28px rgba(15, 23, 42, 0.28);
+  --ls-panel-shadow-soft: 0 14px 35px -22px rgba(15, 23, 42, 0.18);
+  --ls-brand-surface: linear-gradient(135deg, rgba(10, 22, 42, 0.96), rgba(25, 39, 72, 0.96));
+}
+
+body {
+  position: relative;
+  overflow-x: hidden;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at top left, rgba(14, 165, 233, 0.08), transparent 34%),
+    radial-gradient(circle at bottom right, rgba(99, 102, 241, 0.08), transparent 28%);
+  opacity: 0.95;
+  z-index: -1;
+}
+
+.dark body::before {
+  background:
+    radial-gradient(circle at top left, rgba(14, 165, 233, 0.12), transparent 34%),
+    radial-gradient(circle at bottom right, rgba(99, 102, 241, 0.12), transparent 28%);
+}
+
+/* Page view transitions */
+.view-enter {
+  animation: viewEnter 0.42s var(--ls-ease-out) forwards;
+}
+
+@keyframes viewEnter {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.99);
+    filter: blur(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+/* Card hover lift */
+.card-lift {
+  position: relative;
+  overflow: hidden;
+  transition:
+    transform 0.28s var(--ls-ease-out),
+    box-shadow 0.28s var(--ls-ease-out),
+    border-color 0.28s var(--ls-ease-out),
+    background-color 0.28s var(--ls-ease-out);
+}
+
+.card-lift::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.34), transparent 28%);
+  opacity: 0;
+  transition: opacity 0.28s var(--ls-ease-out);
+  pointer-events: none;
+}
+
+.card-lift:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--ls-panel-shadow);
+}
+
+.card-lift:hover::before {
+  opacity: 1;
+}
+
+.dark .card-lift:hover {
+  box-shadow: 0 18px 50px -34px rgba(2, 8, 23, 0.82);
+}
+
+/* Sidebar width transition */
+.sidebar-transition {
+  transition: width 0.3s var(--ls-ease), padding 0.3s var(--ls-ease);
+}
+
+#sidebar {
+  box-shadow: 0 30px 60px -44px rgba(15, 23, 42, 0.45);
+}
+
+#main-shell > header {
+  box-shadow: 0 10px 30px -26px rgba(15, 23, 42, 0.4);
+}
+
+[data-route] {
+  position: relative;
+  transition:
+    transform 0.24s var(--ls-ease-out),
+    background-color 0.24s var(--ls-ease-out),
+    color 0.24s var(--ls-ease-out),
+    box-shadow 0.24s var(--ls-ease-out);
+}
+
+[data-route]:hover {
+  transform: translateX(3px);
+}
+
+[data-route]:active {
+  transform: translateX(1px) scale(0.985);
+}
+
+.brand-mark-shell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 2.8rem;
+  height: 2.8rem;
+  overflow: hidden;
+  border-radius: 0.95rem;
+  background: var(--ls-brand-surface);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 12px 24px -18px rgba(15, 23, 42, 0.75);
+}
+
+.brand-mark-shell--compact {
+  width: 2.35rem;
+  height: 2.35rem;
+  border-radius: 0.85rem;
+}
+
+.brand-mark-shell--footer {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.75rem;
+}
+
+.brand-mark-image {
+  width: 220%;
+  max-width: none;
+  height: 100%;
+  object-fit: cover;
+  object-position: left center;
+  transform: translateX(-1px);
+}
+
+.brand-wordmark-wrap {
+  display: none;
+}
+
+.brand-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.04rem;
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  white-space: nowrap;
+}
+
+.brand-title-primary {
+  color: #1d8ff2;
+}
+
+.brand-title-secondary {
+  color: #f8fafc;
+}
+
+.header-brand-image {
+  display: block;
+  height: auto;
+  width: 100%;
+  max-width: 9.6rem;
+  object-fit: contain;
+}
+
+.header-brand {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  padding: 0;
+}
+
+.header-brand-image {
+  max-width: 7.8rem;
+}
+
+.header-brand-mark {
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.22s var(--ls-ease-out);
+}
+
+.header-brand-mark:hover {
+  transform: translateY(-1px);
+}
+
+.footer-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.loading-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  justify-content: center;
+}
+
+.loading-inline::before {
+  content: "";
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 9999px;
+  border: 2px solid rgba(99, 102, 241, 0.18);
+  border-top-color: rgba(99, 102, 241, 0.92);
+  animation: spinPulse 0.9s linear infinite;
+}
+
+@keyframes spinPulse {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Drag overlay pulse */
+@keyframes dragPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 12px rgba(99, 102, 241, 0.08);
+  }
+}
+
+.drop-zone-active {
+  animation: dragPulse 1.5s ease-in-out infinite;
+}
+
+#drop-zone {
+  box-shadow: var(--ls-panel-shadow-soft);
+}
+
+#drop-zone:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--ls-panel-shadow);
+}
+
+/* Progress bar shimmer */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.progress-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(99, 102, 241, 0.15) 0%,
+    rgba(129, 140, 248, 0.35) 50%,
+    rgba(99, 102, 241, 0.15) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.2s ease-in-out infinite;
+}
+
+/* Table row stagger on load */
+.table-row-animate {
+  animation: rowFade 0.42s var(--ls-ease-out) forwards;
+  opacity: 0;
+}
+
+@keyframes rowFade {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+thead {
+  backdrop-filter: blur(10px);
+}
+
+tbody tr {
+  transition:
+    background-color 0.22s var(--ls-ease-out),
+    transform 0.22s var(--ls-ease-out);
+}
+
+tbody tr:hover {
+  transform: translateX(2px);
+}
+
+/* Scrollbar — subtle */
+.log-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.log-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.log-scroll::-webkit-scrollbar-thumb {
+  border-radius: 9999px;
+  background: rgb(148 163 184 / 0.45);
+}
+.dark .log-scroll::-webkit-scrollbar-thumb {
+  background: rgb(71 85 105 / 0.6);
+}
+
+button,
+input,
+select,
+a {
+  transition:
+    transform 0.2s var(--ls-ease-out),
+    box-shadow 0.2s var(--ls-ease-out),
+    border-color 0.2s var(--ls-ease-out),
+    background-color 0.2s var(--ls-ease-out),
+    color 0.2s var(--ls-ease-out);
+}
+
+button:active,
+a:active {
+  transform: scale(0.985);
+}
+
+input:hover,
+select:hover {
+  border-color: rgba(99, 102, 241, 0.35);
+}
+
+canvas {
+  transition: opacity 0.25s var(--ls-ease-out);
+}
+
+/* Focus rings for a11y */
+:focus-visible {
+  outline: 2px solid rgb(99 102 241);
+  outline-offset: 2px;
+}
+
+@media (max-width: 1023px) {
+  .header-brand {
+    padding: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .footer-brand {
+    gap: 0.5rem;
+  }
+
+  .brand-mark-shell--footer {
+    width: 1.8rem;
+    height: 1.8rem;
+  }
+}

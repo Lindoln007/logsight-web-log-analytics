@@ -1,0 +1,37 @@
+{% extends "accounts/base.html" %}
+
+{% block title %}Profile | LogSight{% endblock %}
+
+{% block content %}
+  <div class="space-y-6">
+    <div class="flex items-start justify-between gap-4">
+      <div>
+        <h1 class="text-2xl font-semibold tracking-tight text-slate-950">Your profile</h1>
+        <p class="mt-2 text-sm text-slate-600">Update your account details for LogSight.</p>
+      </div>
+      <a href="/" class="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Back to app</a>
+    </div>
+
+    <div class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+      <p><span class="font-medium">Joined:</span> {{ request.user.date_joined|date:"M j, Y, g:i a" }}</p>
+      <p class="mt-1"><span class="font-medium">Last login:</span> {{ request.user.last_login|date:"M j, Y, g:i a"|default:"Never" }}</p>
+    </div>
+
+    <form method="post" class="space-y-4">
+      {% csrf_token %}
+      {% for field in form %}
+        <div>
+          <label for="{{ field.id_for_label }}" class="mb-1 block text-sm font-medium text-slate-700">{{ field.label }}</label>
+          {{ field }}
+          {% if field.errors %}
+            <p class="mt-1 text-sm text-red-600">{{ field.errors|join:", " }}</p>
+          {% endif %}
+        </div>
+      {% endfor %}
+
+      <button type="submit" class="w-full rounded-xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-indigo-500">
+        Save changes
+      </button>
+    </form>
+  </div>
+{% endblock %}

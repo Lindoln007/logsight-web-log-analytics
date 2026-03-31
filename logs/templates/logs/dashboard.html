@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{% block title %}{{ title }}{% endblock %}</title>
+</head>
+<body>
+    <h1>LogSight - Web Based Log Analytics System</h1>
+    <p>Welcome to the dashboard. Upload logs to analyze.</p>
+    <a href="{% url 'logs:upload' %}">Upload Log File</a>
+    <a href="/admin/">Admin</a>
+</body>
+</html>
