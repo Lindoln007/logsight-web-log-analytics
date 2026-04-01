@@ -158,6 +158,20 @@
       });
     }
 
+    // Clicking the brand logo while the sidebar is collapsed on desktop expands it.
+    var brandLink = document.getElementById("sidebar-brand");
+    if (brandLink) {
+      brandLink.addEventListener("click", function (e) {
+        if (!isDesktop()) return;
+        if (localStorage.getItem(SIDEBAR_KEY) === "1") {
+          e.preventDefault();
+          e.stopPropagation();
+          localStorage.setItem(SIDEBAR_KEY, "0");
+          apply(false);
+        }
+      });
+    }
+
     if (mobileBtn) mobileBtn.addEventListener("click", openMobileDrawer);
     if (backdrop)  backdrop.addEventListener("click", closeMobileDrawer);
 
@@ -397,7 +411,7 @@
       zone.classList.add("border-indigo-500", "bg-indigo-50", "dark:bg-indigo-950/40", "drop-zone-active");
     });
     zone.addEventListener("dragleave", function (e) {
-      if (e.target === zone)
+      if (!zone.contains(e.relatedTarget))
         zone.classList.remove("border-indigo-500", "bg-indigo-50", "dark:bg-indigo-950/40", "drop-zone-active");
     });
     zone.addEventListener("drop", function (e) {
@@ -423,8 +437,12 @@
       list.prepend(row);
 
       var statusEl = $(".upload-status", row);
-      LogSightAPI.uploadDataset(file).then(function (dataset) {
-        if (statusEl) statusEl.textContent = "Upload complete — analytics computing…";
+
+      function onParseProgress() {
+        if (statusEl) statusEl.textContent = "Parsing… this may take a moment for large files.";
+      }
+
+      LogSightAPI.uploadDataset(file, { onProgress: onParseProgress }).then(function (dataset) {
         var shimmer = $(".progress-shimmer", row);
         if (shimmer) { shimmer.classList.remove("progress-shimmer"); shimmer.classList.add("bg-emerald-500"); }
         row.classList.add("ring-2", "ring-emerald-500/30");
@@ -435,7 +453,10 @@
         if (getHashRoute() === "datasets") loadDatasetsTable();
         // Refresh the dashboard selector silently so it includes the new dataset.
         populateDashboardSelect().then(function () {
-          if (statusEl) statusEl.textContent = "Upload complete";
+          if (statusEl) {
+            var entries = dataset.totalEntries ? " (" + Number(dataset.totalEntries).toLocaleString() + " entries)" : "";
+            statusEl.textContent = "Complete" + entries;
+          }
         });
       }).catch(function (err) {
         if (statusEl) statusEl.textContent = err.message || "Upload failed.";

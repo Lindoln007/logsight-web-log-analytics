@@ -190,6 +190,7 @@
       totalEntries: dataset.total_entries || dataset.totalEntries || 0,
       status: dataset.status || "pending",
       description: dataset.description || "",
+      processingError: dataset.processing_error || null,
     };
   }
 
@@ -282,7 +283,7 @@
       return datasets.map(normalizeDataset);
     },
 
-    async uploadDataset(file) {
+    async uploadDataset(file, options) {
       var formData = new FormData();
       formData.append("file", file);
       formData.append("name", file.name || "Uploaded log");
@@ -293,7 +294,77 @@
         var errors = result.data && result.data.errors ? result.data.errors : null;
         throw new Error(extractErrorMessage(errors) || "Upload failed.");
       }
-      return normalizeDataset(result.data.dataset);
+
+      var dataset = normalizeDataset(result.data.dataset);
+
+      // 202 Accepted means the file was saved and parsing is running in the
+      // background.  Poll until the dataset reaches a terminal status.
+      if (result.status === 202) {
+        var onProgress = options && typeof options.onProgress === "function"
+          ? options.onProgress
+          : null;
+        dataset = await LogSightAPI.pollDatasetUntilComplete(dataset.id, onProgress);
+      }
+
+      return dataset;
+    },
+
+    /**
+     * Poll GET /logs/datasets/<id>/status/ until status is "completed" or "failed".
+     *
+     * Uses the lightweight status endpoint rather than the full dataset detail
+     * response to keep polling traffic minimal.
+     *
+     * Resolves with a normalised dataset object when status reaches "completed".
+     * Rejects with an Error if:
+     *   - status reaches "failed"  (error message from server is included)
+     *   - maxAttempts is exhausted (default: 4 minutes at 1-second intervals)
+     *
+     * @param {string}   datasetId
+     * @param {Function} [onProgress]  called with the current status object on each tick
+     */
+    async pollDatasetUntilComplete(datasetId, onProgress) {
+      var maxAttempts = 240;  // 4 minutes at 1 s intervals
+      var intervalMs  = 1000;
+      var statusUrl   = "/logs/datasets/" + encodeURIComponent(datasetId) + "/status/";
+
+      for (var i = 0; i < maxAttempts; i++) {
+        await new Promise(function (resolve) { setTimeout(resolve, intervalMs); });
+
+        var result = await fetchJson(statusUrl, { method: "GET" });
+
+        if (result.ok && result.data) {
+          var data   = result.data;
+          var status = data.status || "pending";
+
+          if (status === "completed") {
+            // Return a shape compatible with normalizeDataset so callers receive
+            // a consistent object regardless of whether processing was sync or async.
+            return normalizeDataset({
+              id:               data.id,
+              name:             data.name,
+              file_name:        data.name,
+              file_size:        data.file_size,
+              uploaded_at:      data.uploaded_at,
+              total_entries:    data.total_entries,
+              status:           data.status,
+              processing_error: data.processing_error,
+            });
+          }
+
+          if (status === "failed") {
+            var reason = data.processing_error
+              || "Log parsing failed. Make sure the file is a valid Apache or Nginx access log.";
+            throw new Error(reason);
+          }
+
+          if (typeof onProgress === "function") onProgress(data);
+        }
+      }
+
+      throw new Error(
+        "Processing is taking longer than expected. Check the Datasets page for the current status."
+      );
     },
 
     async deleteDataset(datasetId) {

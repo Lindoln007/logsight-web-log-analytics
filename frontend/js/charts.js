@@ -217,7 +217,7 @@
             label: "Requests",
             data: values,
             backgroundColor: values.map(function (_, index) {
-              const alpha = 0.55 + (index % 4) * 0.1;
+              const alpha = 0.85 - (index % 4) * 0.1;
               return c.dark ? "rgba(129,140,248," + alpha + ")" : "rgba(79,70,229," + alpha + ")";
             }),
             borderRadius: 6,
@@ -264,11 +264,7 @@
     const g1 = ctx.createLinearGradient(0, 0, 0, el.height || 200);
     g1.addColorStop(0, "rgba(34,211,238,0.35)");
     g1.addColorStop(1, "transparent");
-    const g2 = ctx.createLinearGradient(0, 0, 0, el.height || 200);
-    g2.addColorStop(0, "rgba(99,102,241,0.3)");
-    g2.addColorStop(1, "transparent");
-    const first = data && data.datasets && data.datasets[0] ? data.datasets[0] : { label: "Inbound", data: [] };
-    const second = data && data.datasets && data.datasets[1] ? data.datasets[1] : { label: "Outbound", data: [] };
+    const first = data && data.datasets && data.datasets[0] ? data.datasets[0] : { label: "Requests by Hour", data: [] };
 
     charts.traffic = new Chart(ctx, {
       type: "line",
@@ -276,20 +272,10 @@
         labels: data && data.labels ? data.labels : [],
         datasets: [
           {
-            label: first.label || "Inbound",
+            label: first.label || "Requests by Hour",
             data: Array.isArray(first.data) ? first.data : [],
             borderColor: c.accent,
             backgroundColor: g1,
-            fill: true,
-            tension: 0.35,
-            borderWidth: 2,
-            pointRadius: 0,
-          },
-          {
-            label: second.label || "Outbound",
-            data: Array.isArray(second.data) ? second.data : [],
-            borderColor: c.primary,
-            backgroundColor: g2,
             fill: true,
             tension: 0.35,
             borderWidth: 2,

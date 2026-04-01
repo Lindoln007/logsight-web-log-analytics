@@ -168,7 +168,11 @@ body::before {
 }
 
 .brand-title-secondary {
-  color: #f8fafc;
+  color: #475569; /* slate-600 — readable on white sidebar in light mode */
+}
+
+.dark .brand-title-secondary {
+  color: #f8fafc; /* near-white — readable on dark sidebar */
 }
 
 .header-brand-image {

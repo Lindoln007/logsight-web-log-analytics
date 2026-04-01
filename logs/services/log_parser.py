@@ -124,9 +124,14 @@ class LogParsingService:
                 stats.inserted_entries,
             )
             return stats
-        except Exception:
+        except Exception as exc:
             dataset.status = Dataset.STATUS_FAILED
-            dataset.save(update_fields=["status"])
+            # Preserve a human-readable reason so the frontend and operators
+            # can diagnose the failure without digging through server logs.
+            dataset.processing_error = (
+                str(exc).strip() or type(exc).__name__
+            )[:1000]  # cap at 1 000 chars to protect the column
+            dataset.save(update_fields=["status", "processing_error"])
             logger.exception(
                 "Log parsing failed for dataset_id=%s path=%s",
                 dataset.pk,

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.db import connection as _db_connection
 from django.db import transaction
 from django.utils import timezone
 
@@ -20,12 +23,16 @@ User = get_user_model()
 @dataclass(slots=True)
 class UploadProcessingResult:
     dataset: Dataset
+    # stats is None when processing runs in the background.
+    # Poll GET /logs/datasets/<id>/ and check dataset.status for completion.
     stats: Optional[LogParseStats] = None
     error: Optional[str] = None
 
     @property
     def succeeded(self) -> bool:
-        return self.error is None and self.dataset.status == Dataset.STATUS_COMPLETED
+        # A background-scheduled upload always returns status=pending initially.
+        # "succeeded" here means the file was accepted and processing was scheduled.
+        return self.error is None
 
 
 def create_dataset_from_upload(
@@ -34,11 +41,16 @@ def create_dataset_from_upload(
     uploaded_file,
     name: Optional[str] = None,
     description: str = "",
-    batch_size: int = DEFAULT_BATCH_SIZE,
+    batch_size: Optional[int] = None,
 ) -> UploadProcessingResult:
     """
-    Persist an uploaded file, create the dataset record, and trigger parsing.
+    Persist an uploaded file, create the dataset record, and schedule background parsing.
+
+    Returns immediately with the new Dataset in PENDING status.
+    Parsing and analytics computation run in a daemon thread.
+    Callers should poll GET /logs/datasets/<id>/ to track progress.
     """
+    effective_batch_size = batch_size or getattr(settings, "LOGS_PARSE_BATCH_SIZE", DEFAULT_BATCH_SIZE)
 
     dataset_name = (name or _derive_dataset_name(uploaded_file.name)).strip()
     dataset = Dataset.objects.create(
@@ -51,38 +63,106 @@ def create_dataset_from_upload(
     )
 
     logger.info(
-        "Created dataset_id=%s for user_id=%s uploaded file=%s size=%s",
+        "Created dataset_id=%s for user_id=%s file=%s size=%s bytes — scheduling background parse",
         dataset.pk,
         owner.pk,
         uploaded_file.name,
         getattr(uploaded_file, "size", None),
     )
 
-    try:
-        dataset.status = Dataset.STATUS_PROCESSING
-        dataset.save(update_fields=["status"])
+    thread = threading.Thread(
+        target=_process_dataset_in_background,
+        kwargs={"dataset_id": dataset.pk, "batch_size": effective_batch_size},
+        daemon=True,
+        name=f"logsight-parse-{dataset.pk}",
+    )
+    thread.start()
 
-        stats = parse_dataset_log(dataset.pk, batch_size=batch_size)
+    return UploadProcessingResult(dataset=dataset)
+
+
+def _process_dataset_in_background(*, dataset_id: int, batch_size: int) -> None:
+    """
+    Background worker: parse the uploaded log file and compute analytics.
+
+    Runs in a daemon thread started by create_dataset_from_upload().
+    Each thread gets its own Django DB connection (Django's ORM is thread-safe
+    but connections are not shared).  The connection is explicitly closed on exit
+    to return it to the pool and avoid leaking persistent connections.
+
+    Failure contract
+    ----------------
+    * If parse_dataset_log() raises, it already sets STATUS_FAILED and writes
+      processing_error before re-raising.
+    * _ensure_dataset_not_stuck() is a last-resort guard: if any exception
+      escapes this function while the dataset is still in PENDING or PROCESSING
+      (e.g., a DB connectivity error before parse_dataset_log() started), it
+      transitions the dataset to FAILED so the record is never stuck.
+    """
+    try:
+        # Django creates a new per-thread connection lazily on first query.
+        # Discard any stale state inherited from the parent thread.
+        _db_connection.close_old_connections()
+
+        stats = parse_dataset_log(dataset_id, batch_size=batch_size)
+
+        logger.info(
+            "Background parse completed dataset_id=%s inserted=%s skipped=%s",
+            dataset_id,
+            stats.inserted_entries,
+            stats.skipped_lines,
+        )
 
         try:
-            compute_and_persist_analytics(dataset.pk)
+            compute_and_persist_analytics(dataset_id)
         except Exception:
             logger.exception(
                 "Analytics computation failed for dataset_id=%s; "
-                "data is still available for on-demand computation.",
-                dataset.pk,
+                "data is still accessible for on-demand computation.",
+                dataset_id,
             )
 
-        dataset.refresh_from_db(
-            fields=["owner", "status", "total_entries", "file", "file_size", "uploaded_at"]
+    except Exception:
+        logger.exception("Background processing failed for dataset_id=%s", dataset_id)
+        # Guard: transition to FAILED if parse_dataset_log() did not already
+        # do so (i.e., if the error occurred before parsing started).
+        _ensure_dataset_not_stuck(dataset_id)
+    finally:
+        # Always release the connection so it doesn't linger after the thread exits.
+        try:
+            _db_connection.close()
+        except Exception:
+            pass
+
+
+def _ensure_dataset_not_stuck(dataset_id: int) -> None:
+    """
+    Transition a dataset from PENDING or PROCESSING → FAILED if it is still
+    in a non-terminal state.
+
+    This is a no-op when parse_dataset_log() already wrote STATUS_FAILED.
+    It fires only when an unexpected error occurred before the parser ran
+    (e.g., a DB connection failure at thread start-up).
+    """
+    try:
+        updated = Dataset.objects.filter(
+            pk=dataset_id,
+            status__in=[Dataset.STATUS_PENDING, Dataset.STATUS_PROCESSING],
+        ).update(
+            status=Dataset.STATUS_FAILED,
+            processing_error="Processing was interrupted before it could complete.",
         )
-        return UploadProcessingResult(dataset=dataset, stats=stats)
-    except Exception as exc:
-        dataset.refresh_from_db(
-            fields=["owner", "status", "total_entries", "file", "file_size", "uploaded_at"]
+        if updated:
+            logger.warning(
+                "Marked dataset_id=%s as failed via safety net (was stuck in non-terminal state)",
+                dataset_id,
+            )
+    except Exception:
+        logger.exception(
+            "Safety net could not mark dataset_id=%s as failed — "
+            "dataset may be stuck in PENDING/PROCESSING",
+            dataset_id,
         )
-        logger.exception("Dataset processing failed dataset_id=%s", dataset.pk)
-        return UploadProcessingResult(dataset=dataset, error=str(exc))
 
 
 def list_datasets(*, owner: User):
@@ -101,6 +181,7 @@ def list_datasets(*, owner: User):
             "total_entries",
             "status",
             "description",
+            "processing_error",
         )
         .filter(owner=owner)
         .order_by("-uploaded_at")
@@ -120,6 +201,7 @@ def serialize_dataset(dataset: Dataset) -> dict:
         "total_entries": dataset.total_entries,
         "status": dataset.status,
         "description": dataset.description,
+        "processing_error": dataset.processing_error,
     }
 
 

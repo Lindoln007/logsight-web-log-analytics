@@ -163,7 +163,21 @@ LOGOUT_REDIRECT_URL = 'accounts:login'
 # ---------------------------------------------------------------------------
 # Maximum size (bytes) accepted for uploaded log files.  Validated in
 # LogUploadForm and surfaced to the frontend via the /logs/upload/ GET endpoint.
-LOGS_MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100 MB
+#
+# Architecture note: uploads are safe at this size because:
+#   1. FILES > FILE_UPLOAD_MAX_MEMORY_SIZE are streamed to disk by Django before
+#      the view body runs — no large in-memory buffer.
+#   2. The file is saved to MEDIA_ROOT via FileField before parsing starts.
+#   3. The parser reads the file line-by-line from disk (streaming iterator).
+#   4. DB inserts use bulk_create() in LOGS_PARSE_BATCH_SIZE-row batches.
+#   5. Parsing runs in a background daemon thread so the HTTP response returns
+#      immediately (202 Accepted) and the client polls for completion.
+LOGS_MAX_UPLOAD_SIZE = 500 * 1024 * 1024  # 500 MB
+
+# Number of parsed LogEntry objects accumulated before each bulk_create() call.
+# Larger values reduce transaction overhead on big files; smaller values limit
+# peak memory per batch.  2 000 rows ≈ 600 KB RAM — well within safe bounds.
+LOGS_PARSE_BATCH_SIZE = 2000
 
 # Django will buffer uploaded files in memory below FILE_UPLOAD_MAX_MEMORY_SIZE
 # and then stream to a temp file on disk above it.  Keep this low so large

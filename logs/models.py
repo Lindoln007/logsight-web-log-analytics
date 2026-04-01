@@ -46,6 +46,14 @@ class Dataset(models.Model):
         db_index=True,
     )
     description = models.TextField(null=True, blank=True)
+    processing_error = models.TextField(
+        null=True,
+        blank=True,
+        help_text=(
+            "Short description of why parsing failed. "
+            "Null unless status is 'failed'."
+        ),
+    )
 
     class Meta:
         ordering = ["-uploaded_at"]

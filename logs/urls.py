@@ -11,6 +11,7 @@ urlpatterns = [
     path("upload/", views.upload_log_view, name="upload"),
     path("datasets/", views.dataset_list_view, name="dataset-list"),
     path("datasets/<int:dataset_id>/", views.dataset_detail_view, name="dataset-detail"),
+    path("datasets/<int:dataset_id>/status/", views.dataset_status_view, name="dataset-status"),
     path("datasets/<int:dataset_id>/delete/", views.delete_dataset_view, name="dataset-delete"),
 
     # ------------------------------------------------------------------

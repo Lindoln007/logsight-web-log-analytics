@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import asdict
 
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.http import HttpRequest, JsonResponse
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from django.views.decorators.http import require_GET, require_http_methods
 
 from logs.forms import DEFAULT_MAX_UPLOAD_SIZE, LogUploadForm
@@ -62,6 +62,43 @@ def dataset_detail_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
 
 
 @login_required
+@require_GET
+def dataset_status_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
+    """
+    GET /logs/datasets/<id>/status/
+
+    Lightweight polling endpoint for background-processing progress.
+    Returns only the fields needed to track processing state and display
+    a result — intentionally smaller than the full dataset detail response.
+
+    Response shape
+    --------------
+    {
+        "id": int,
+        "name": "access.log",
+        "status": "pending" | "processing" | "completed" | "failed",
+        "total_entries": int,       # 0 while processing; final count when done
+        "file_size": int | null,    # bytes
+        "uploaded_at": "ISO8601",
+        "processing_error": str | null   # non-null only when status == "failed"
+    }
+    """
+    dataset = _get_user_dataset(request, dataset_id)
+    return JsonResponse(
+        {
+            "id": dataset.pk,
+            "name": dataset.name,
+            "status": dataset.status,
+            "total_entries": dataset.total_entries,
+            "file_size": dataset.file_size,
+            "uploaded_at": timezone.localtime(dataset.uploaded_at).isoformat(),
+            "processing_error": dataset.processing_error,
+        },
+        status=200,
+    )
+
+
+@login_required
 @require_http_methods(["GET", "POST"])
 def upload_log_view(request: HttpRequest) -> JsonResponse:
     if request.method == "GET":
@@ -91,14 +128,13 @@ def upload_log_view(request: HttpRequest) -> JsonResponse:
 
     payload = {
         "dataset": serialize_dataset(result.dataset),
-        "stats": asdict(result.stats) if result.stats else None,
+        # stats are not available yet — parsing runs in the background.
+        # Poll GET /logs/datasets/<id>/ until dataset.status == "completed".
+        "stats": None,
     }
 
-    if result.error:
-        payload["error"] = result.error
-        return JsonResponse(payload, status=422)
-
-    return JsonResponse(payload, status=201)
+    # 202 Accepted: file received, parsing scheduled in background thread.
+    return JsonResponse(payload, status=202)
 
 
 @login_required
