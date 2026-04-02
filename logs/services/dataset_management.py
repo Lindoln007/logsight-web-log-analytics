@@ -8,6 +8,7 @@ from typing import Optional
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.db import close_old_connections
 from django.db import connection as _db_connection
 from django.db import transaction
 from django.utils import timezone
@@ -102,7 +103,7 @@ def _process_dataset_in_background(*, dataset_id: int, batch_size: int) -> None:
     try:
         # Django creates a new per-thread connection lazily on first query.
         # Discard any stale state inherited from the parent thread.
-        _db_connection.close_old_connections()
+        close_old_connections()
 
         stats = parse_dataset_log(dataset_id, batch_size=batch_size)
 
