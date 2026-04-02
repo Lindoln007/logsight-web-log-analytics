@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(psql -U postgres -c \"CREATE DATABASE loganalytics;\")",
+      "Bash(find 'D:\\\\Projects\\\\Final Year Project\\\\Log Sight- Web Based Log Analytics System\\\\frontend' -type f \\\\\\(-name *.html -o -name *.css -o -name *.js \\\\\\))"
+    ]
+  }
+}
