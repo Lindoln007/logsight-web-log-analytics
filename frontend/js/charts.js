@@ -311,12 +311,223 @@
     });
   }
 
+  // ---------------------------------------------------------------------------
+  // Forecast chart
+  // ---------------------------------------------------------------------------
+  //
+  // Renders two overlaid line series on a single chart:
+  //   - "Historical" (solid indigo line) for actual recorded request counts.
+  //   - "Forecast"   (dashed amber line) for predicted future values.
+  //
+  // The two series share the same x-axis labels (concatenated timestamps).
+
+  function renderForecastChart(canvasId, data) {
+    ensureEmptyStatePlugin();
+    destroyChart("forecast");
+    const el = document.getElementById(canvasId);
+    if (!el) return;
+    const c = getThemeColors();
+    const ctx = el.getContext("2d");
+
+    const historical = data && Array.isArray(data.historical) ? data.historical : [];
+    const forecast   = data && Array.isArray(data.forecast)   ? data.forecast   : [];
+
+    // Build a unified label array.
+    const histLabels = historical.map(function (p) { return p.label || ""; });
+    const fcstLabels = forecast.map(function (p) { return p.label || ""; });
+    const allLabels  = histLabels.concat(fcstLabels);
+
+    // Historical dataset: real values then nulls (so it ends where history ends).
+    const histValues = historical.map(function (p) { return p.value; })
+      .concat(forecast.map(function () { return null; }));
+
+    // Forecast dataset: nulls up to the last historical point, then predictions.
+    const lastHistIdx = historical.length > 0 ? historical.length - 1 : 0;
+    const fcstPad = new Array(lastHistIdx).fill(null);
+    // Connect at the last historical point for a visual join.
+    const connectValue = historical.length > 0 ? historical[historical.length - 1].value : null;
+    const fcstValues = fcstPad.concat([connectValue]).concat(forecast.map(function (p) { return p.value; }));
+
+    const gradHist = ctx.createLinearGradient(0, 0, 0, el.height || 200);
+    gradHist.addColorStop(0, c.primarySoft);
+    gradHist.addColorStop(1, "transparent");
+
+    charts.forecast = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels: allLabels,
+        datasets: [
+          {
+            label: "Historical",
+            data: histValues,
+            borderColor: c.primary,
+            backgroundColor: gradHist,
+            fill: true,
+            tension: 0.35,
+            borderWidth: 2,
+            pointRadius: 0,
+            pointHoverRadius: 4,
+            spanGaps: false,
+          },
+          {
+            label: "Forecast",
+            data: fcstValues,
+            borderColor: c.warn,
+            backgroundColor: "transparent",
+            fill: false,
+            tension: 0.35,
+            borderWidth: 2,
+            borderDash: [6, 4],
+            pointRadius: 0,
+            pointHoverRadius: 4,
+            spanGaps: false,
+          },
+        ],
+      },
+      options: {
+        ...defaultChartOptions(),
+        interaction: { intersect: false, mode: "index" },
+        plugins: {
+          ...defaultChartOptions().plugins,
+          legend: {
+            labels: { color: c.text, font: { family: "'Inter', system-ui, sans-serif", size: 11 }, usePointStyle: true },
+          },
+          tooltip: {
+            backgroundColor: c.dark ? "#1e293b" : "#fff",
+            titleColor: c.text,
+            bodyColor: c.textMuted,
+            borderColor: c.grid,
+            borderWidth: 1,
+            padding: 12,
+            cornerRadius: 8,
+            filter: function (item) { return item.raw !== null; },
+          },
+          logSightEmptyState: { enabled: false },
+        },
+        scales: {
+          x: {
+            grid: { color: c.grid },
+            ticks: { color: c.textMuted, maxRotation: 45, maxTicksLimit: 16 },
+          },
+          y: {
+            beginAtZero: true,
+            grid: { color: c.grid },
+            ticks: { color: c.textMuted },
+          },
+        },
+      },
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Anomaly detection chart
+  // ---------------------------------------------------------------------------
+  //
+  // Renders the full hourly request series as a blue area chart, then overlays
+  // red scatter-point markers at each detected anomalous hour.
+
+  function renderAnomalyChart(canvasId, historicalData, anomalies) {
+    ensureEmptyStatePlugin();
+    destroyChart("anomalies");
+    const el = document.getElementById(canvasId);
+    if (!el) return;
+    const c = getThemeColors();
+    const ctx = el.getContext("2d");
+
+    const hist   = Array.isArray(historicalData) ? historicalData : [];
+    const anomArr = Array.isArray(anomalies)     ? anomalies      : [];
+
+    const labels = hist.map(function (p) { return p.label || ""; });
+    const values = hist.map(function (p) { return p.value; });
+
+    // Build a lookup: label → value for anomaly overlay.
+    const anomalySet = {};
+    anomArr.forEach(function (a) {
+      if (a.type === "request_spike") anomalySet[a.label] = a.value;
+    });
+
+    // Anomaly scatter data aligned to the same x-axis.
+    const anomalyPoints = labels.map(function (lbl, i) {
+      return Object.prototype.hasOwnProperty.call(anomalySet, lbl) ? values[i] : null;
+    });
+
+    const grad = ctx.createLinearGradient(0, 0, 0, el.height || 200);
+    grad.addColorStop(0, "rgba(99,102,241,0.2)");
+    grad.addColorStop(1, "transparent");
+
+    charts.anomalies = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: "Requests",
+            data: values,
+            borderColor: c.primary,
+            backgroundColor: grad,
+            fill: true,
+            tension: 0.35,
+            borderWidth: 2,
+            pointRadius: 0,
+            pointHoverRadius: 4,
+            order: 2,
+          },
+          {
+            label: "Anomaly",
+            data: anomalyPoints,
+            type: "scatter",
+            borderColor: c.danger,
+            backgroundColor: c.danger,
+            pointRadius: 7,
+            pointHoverRadius: 9,
+            pointStyle: "circle",
+            order: 1,
+          },
+        ],
+      },
+      options: {
+        ...defaultChartOptions(),
+        interaction: { intersect: false, mode: "index" },
+        plugins: {
+          ...defaultChartOptions().plugins,
+          legend: {
+            labels: { color: c.text, font: { family: "'Inter', system-ui, sans-serif", size: 11 }, usePointStyle: true },
+          },
+          tooltip: {
+            backgroundColor: c.dark ? "#1e293b" : "#fff",
+            titleColor: c.text,
+            bodyColor: c.textMuted,
+            borderColor: c.grid,
+            borderWidth: 1,
+            padding: 12,
+            cornerRadius: 8,
+            filter: function (item) { return item.raw !== null; },
+          },
+          logSightEmptyState: { enabled: false },
+        },
+        scales: {
+          x: {
+            grid: { color: c.grid },
+            ticks: { color: c.textMuted, maxRotation: 45, maxTicksLimit: 16 },
+          },
+          y: {
+            beginAtZero: true,
+            grid: { color: c.grid },
+            ticks: { color: c.textMuted },
+          },
+        },
+      },
+    });
+  }
+
   global.LogSightCharts = {
     destroyAll: destroyAll,
     renderRequestFrequency: renderRequestFrequency,
     renderStatusDoughnut: renderStatusDoughnut,
     renderTopEndpoints: renderTopEndpoints,
     renderTrafficArea: renderTrafficArea,
+    renderForecastChart: renderForecastChart,
+    renderAnomalyChart: renderAnomalyChart,
     getThemeColors: getThemeColors,
   };
 })(typeof window !== "undefined" ? window : globalThis);

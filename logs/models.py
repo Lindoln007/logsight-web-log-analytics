@@ -258,3 +258,110 @@ class AnalyticsSummary(models.Model):
 
     def __str__(self):
         return f"Summary for '{self.dataset.name}' (computed {self.computed_at:%Y-%m-%d %H:%M})"
+
+
+class AlertRule(models.Model):
+    """
+    A user-defined threshold rule for a dataset.
+    When thresholds are exceeded, an Alert record is created.
+    """
+
+    dataset = models.ForeignKey(
+        Dataset,
+        on_delete=models.CASCADE,
+        related_name="alert_rules",
+        db_index=True,
+    )
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="alert_rules",
+        db_index=True,
+    )
+    name = models.CharField(max_length=255, default="Alert Rule")
+    error_rate_threshold = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Trigger when the dataset's overall error rate exceeds this % value.",
+    )
+    request_spike_multiplier = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Trigger when the most-recent hourly count exceeds mean * this multiplier.",
+    )
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.name} (dataset: {self.dataset.name})"
+
+
+class Alert(models.Model):
+    """
+    A single triggered-alert instance produced when an AlertRule fires.
+    """
+
+    SEVERITY_HIGH = "high"
+    SEVERITY_MEDIUM = "medium"
+    SEVERITY_LOW = "low"
+
+    ALERT_TYPE_ERROR_RATE = "error_rate"
+    ALERT_TYPE_REQUEST_SPIKE = "request_spike"
+
+    rule = models.ForeignKey(
+        AlertRule,
+        on_delete=models.CASCADE,
+        related_name="alerts",
+    )
+    triggered_at = models.DateTimeField(default=timezone.now, db_index=True)
+    alert_type = models.CharField(max_length=50)
+    value = models.DecimalField(
+        max_digits=14,
+        decimal_places=3,
+        help_text="The measured value that triggered this alert.",
+    )
+    threshold = models.DecimalField(
+        max_digits=14,
+        decimal_places=3,
+        help_text="The threshold that was exceeded.",
+    )
+    severity = models.CharField(max_length=20, default=SEVERITY_MEDIUM)
+    message = models.TextField()
+
+    class Meta:
+        ordering = ["-triggered_at"]
+
+    def __str__(self):
+        return f"Alert [{self.severity}] {self.alert_type} at {self.triggered_at:%Y-%m-%d %H:%M}"
+
+
+class DashboardPreference(models.Model):
+    """
+    Per-user dashboard widget preferences (hidden widgets, saved filters).
+    One record per user — updated in-place.
+    """
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="dashboard_preference",
+    )
+    hidden_widgets = models.JSONField(
+        default=list,
+        help_text="List of widget IDs that should be hidden on the dashboard.",
+    )
+    preferences = models.JSONField(
+        default=dict,
+        help_text="Arbitrary preference key-value pairs (filters, layout, etc.).",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Preferences for {self.user.username}"

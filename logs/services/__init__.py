@@ -22,6 +22,17 @@ from .dataset_management import (
     serialize_dataset,
 )
 from .log_parser import LogParseStats, LogParsingService, parse_dataset_log
+from .forecasting import get_traffic_forecast
+from .anomaly_detection import get_anomalies
+from .alerts import (
+    get_alert_rules,
+    create_alert_rule,
+    update_alert_rule,
+    delete_alert_rule,
+    get_alert_history,
+    check_and_trigger_alerts,
+)
+from .reports import generate_csv_report, generate_json_report
 
 __all__ = [
     # Log entries
@@ -51,4 +62,18 @@ __all__ = [
     "list_datasets",
     "parse_dataset_log",
     "serialize_dataset",
+    # Forecasting
+    "get_traffic_forecast",
+    # Anomaly detection
+    "get_anomalies",
+    # Alerts
+    "get_alert_rules",
+    "create_alert_rule",
+    "update_alert_rule",
+    "delete_alert_rule",
+    "get_alert_history",
+    "check_and_trigger_alerts",
+    # Reports
+    "generate_csv_report",
+    "generate_json_report",
 ]

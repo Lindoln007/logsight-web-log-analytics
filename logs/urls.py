@@ -17,10 +17,6 @@ urlpatterns = [
     # ------------------------------------------------------------------
     # Log entries — paginated viewer data
     # ------------------------------------------------------------------
-    #
-    # GET /logs/datasets/<id>/entries/
-    #   ?page=1 &page_size=25 &status=all|2xx|4xx|5xx|errors &search=<str>
-    #
     path(
         "datasets/<int:dataset_id>/entries/",
         views.log_entries_view,
@@ -31,15 +27,11 @@ urlpatterns = [
     # Analytics  (all scoped under /logs/datasets/<id>/analytics/)
     # ------------------------------------------------------------------
 
-    # Full overview — all analytics sections in one response.
-    # Useful for the initial dashboard render.
     path(
         "datasets/<int:dataset_id>/analytics/",
         views.analytics_overview_view,
         name="analytics-overview",
     ),
-
-    # Individual sections — for targeted chart refreshes.
     path(
         "datasets/<int:dataset_id>/analytics/summary/",
         views.analytics_summary_view,
@@ -75,11 +67,69 @@ urlpatterns = [
         views.analytics_error_breakdown_view,
         name="analytics-errors",
     ),
-
-    # Force-recompute — invalidates cache and re-runs all aggregations.
     path(
         "datasets/<int:dataset_id>/analytics/refresh/",
         views.analytics_refresh_view,
         name="analytics-refresh",
+    ),
+
+    # ------------------------------------------------------------------
+    # Traffic forecasting
+    # ------------------------------------------------------------------
+    path(
+        "datasets/<int:dataset_id>/forecast/",
+        views.forecast_view,
+        name="forecast",
+    ),
+
+    # ------------------------------------------------------------------
+    # Anomaly detection
+    # ------------------------------------------------------------------
+    path(
+        "datasets/<int:dataset_id>/anomalies/",
+        views.anomaly_detection_view,
+        name="anomalies",
+    ),
+
+    # ------------------------------------------------------------------
+    # Alerts  (rules + history, scoped to dataset)
+    # ------------------------------------------------------------------
+    path(
+        "datasets/<int:dataset_id>/alerts/",
+        views.alerts_view,
+        name="alerts",
+    ),
+    path(
+        "datasets/<int:dataset_id>/alerts/check/",
+        views.alerts_check_view,
+        name="alerts-check",
+    ),
+    path(
+        "datasets/<int:dataset_id>/alerts/history/",
+        views.alert_history_view,
+        name="alerts-history",
+    ),
+    path(
+        "datasets/<int:dataset_id>/alerts/<int:rule_id>/",
+        views.alert_rule_detail_view,
+        name="alert-rule-detail",
+    ),
+
+    # ------------------------------------------------------------------
+    # Report generation  (download CSV or JSON)
+    # ------------------------------------------------------------------
+    path(
+        "datasets/<int:dataset_id>/report/",
+        views.report_view,
+        name="report",
+    ),
+
+    # ------------------------------------------------------------------
+    # Dashboard preferences  (per-user, not per-dataset)
+    # ------------------------------------------------------------------
+    path(
+        "preferences/",
+        views.dashboard_preferences_view,
+        name="preferences",
     ),
 ]

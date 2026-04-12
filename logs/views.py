@@ -1,23 +1,32 @@
 from __future__ import annotations
 
+import json
 import logging
 
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
-from django.http import HttpRequest, JsonResponse
+from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.views.decorators.http import require_GET, require_http_methods
 
 from logs.forms import DEFAULT_MAX_UPLOAD_SIZE, LogUploadForm
-from logs.models import Dataset
+from logs.models import AlertRule, Dataset
 from logs.services import (
     PAGE_SIZE_DEFAULT,
     PAGE_SIZE_MAX,
+    check_and_trigger_alerts,
     compute_and_persist_analytics,
+    create_alert_rule,
     create_dataset_from_upload,
+    delete_alert_rule,
     delete_dataset_and_file,
+    generate_csv_report,
+    generate_json_report,
+    get_alert_history,
+    get_alert_rules,
     get_analytics_overview,
+    get_anomalies,
     get_error_breakdown,
     get_hourly_traffic,
     get_log_entries,
@@ -26,8 +35,10 @@ from logs.services import (
     get_status_distribution,
     get_summary_metrics,
     get_top_endpoints,
+    get_traffic_forecast,
     list_datasets,
     serialize_dataset,
+    update_alert_rule,
 )
 from logs.services.analytics import (
     DEFAULT_TOP_ENDPOINTS_LIMIT,
@@ -413,6 +424,256 @@ def analytics_refresh_view(request: HttpRequest, dataset_id: int) -> JsonRespons
             "computed_at": summary.computed_at.isoformat(),
             "total_requests": summary.total_requests,
             "total_errors": summary.total_errors,
+        },
+        status=200,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Traffic forecasting view
+# ---------------------------------------------------------------------------
+
+
+@login_required
+@require_GET
+def forecast_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
+    """
+    GET /logs/datasets/<id>/forecast/
+
+    Predict future request volume from historical trends.
+
+    Query parameters
+    ----------------
+    periods : int   — number of future hours to forecast (default 24, max 168)
+    method  : str   — "moving_avg" (default) | "linear_regression"
+    """
+    dataset = _get_user_dataset(request, dataset_id)
+    error = _dataset_ready_or_error(dataset)
+    if error:
+        return error
+
+    periods = min(_parse_int_param(request, "periods", 24), 168)
+    method  = request.GET.get("method", "moving_avg")
+    if method not in ("moving_avg", "linear_regression"):
+        method = "moving_avg"
+
+    data = get_traffic_forecast(dataset_id, owner=request.user, periods=periods, method=method)
+    return JsonResponse(data, status=200)
+
+
+# ---------------------------------------------------------------------------
+# Anomaly detection view
+# ---------------------------------------------------------------------------
+
+
+@login_required
+@require_GET
+def anomaly_detection_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
+    """
+    GET /logs/datasets/<id>/anomalies/
+
+    Detect statistical anomalies in request frequency and error rates.
+
+    Query parameters
+    ----------------
+    sensitivity : "low" | "medium" (default) | "high"
+    """
+    dataset = _get_user_dataset(request, dataset_id)
+    error = _dataset_ready_or_error(dataset)
+    if error:
+        return error
+
+    sensitivity = request.GET.get("sensitivity", "medium")
+    if sensitivity not in ("low", "medium", "high"):
+        sensitivity = "medium"
+
+    data = get_anomalies(dataset_id, owner=request.user, sensitivity=sensitivity)
+    return JsonResponse(data, status=200)
+
+
+# ---------------------------------------------------------------------------
+# Alert management views
+# ---------------------------------------------------------------------------
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def alerts_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
+    """
+    GET  /logs/datasets/<id>/alerts/  — list all alert rules for the dataset.
+    POST /logs/datasets/<id>/alerts/  — create a new alert rule.
+
+    POST body (JSON):
+    {
+        "name": "High error rate",
+        "error_rate_threshold": 5.0,
+        "request_spike_multiplier": 3.0,
+        "is_active": true
+    }
+    """
+    _get_user_dataset(request, dataset_id)
+
+    if request.method == "GET":
+        rules   = get_alert_rules(dataset_id, owner=request.user)
+        history = get_alert_history(dataset_id, owner=request.user, limit=20)
+        return JsonResponse({"rules": rules, "recent_alerts": history}, status=200)
+
+    # POST — create rule
+    try:
+        body = json.loads(request.body)
+    except (ValueError, KeyError):
+        return JsonResponse({"error": "Invalid JSON body."}, status=400)
+
+    rule = create_alert_rule(dataset_id, owner=request.user, data=body)
+    return JsonResponse({"rule": rule}, status=201)
+
+
+@login_required
+@require_http_methods(["PUT", "PATCH", "DELETE"])
+def alert_rule_detail_view(request: HttpRequest, dataset_id: int, rule_id: int) -> JsonResponse:
+    """
+    PUT/PATCH /logs/datasets/<id>/alerts/<rule_id>/  — update a rule.
+    DELETE    /logs/datasets/<id>/alerts/<rule_id>/  — delete a rule.
+    """
+    _get_user_dataset(request, dataset_id)
+
+    # Verify the rule belongs to this user.
+    get_object_or_404(AlertRule, pk=rule_id, owner=request.user, dataset_id=dataset_id)
+
+    if request.method == "DELETE":
+        delete_alert_rule(rule_id, owner=request.user)
+        return JsonResponse({"deleted": True, "rule_id": rule_id}, status=200)
+
+    try:
+        body = json.loads(request.body)
+    except (ValueError, KeyError):
+        return JsonResponse({"error": "Invalid JSON body."}, status=400)
+
+    rule = update_alert_rule(rule_id, owner=request.user, data=body)
+    return JsonResponse({"rule": rule}, status=200)
+
+
+@login_required
+@require_http_methods(["POST"])
+def alerts_check_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
+    """
+    POST /logs/datasets/<id>/alerts/check/
+
+    Evaluate all active rules and create Alert records for any that fire.
+    Returns the newly-triggered alerts (empty list if none fired).
+    """
+    dataset = _get_user_dataset(request, dataset_id)
+    error = _dataset_ready_or_error(dataset)
+    if error:
+        return error
+
+    triggered = check_and_trigger_alerts(dataset_id, owner=request.user)
+    return JsonResponse({"triggered": triggered, "count": len(triggered)}, status=200)
+
+
+@login_required
+@require_GET
+def alert_history_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
+    """
+    GET /logs/datasets/<id>/alerts/history/
+
+    Return recent alert instances for the dataset (newest first).
+    """
+    _get_user_dataset(request, dataset_id)
+    limit   = min(_parse_int_param(request, "limit", 50), 200)
+    history = get_alert_history(dataset_id, owner=request.user, limit=limit)
+    return JsonResponse({"alerts": history, "count": len(history)}, status=200)
+
+
+# ---------------------------------------------------------------------------
+# Report generation views
+# ---------------------------------------------------------------------------
+
+
+@login_required
+@require_GET
+def report_view(request: HttpRequest, dataset_id: int) -> HttpResponse:
+    """
+    GET /logs/datasets/<id>/report/
+
+    Download a report for the dataset.
+
+    Query parameters
+    ----------------
+    format : "csv" (default) | "json"
+    """
+    dataset = _get_user_dataset(request, dataset_id)
+    error = _dataset_ready_or_error(dataset)
+    if error:
+        return error
+
+    fmt = request.GET.get("format", "csv").lower()
+
+    if fmt == "json":
+        data     = generate_json_report(dataset_id, owner=request.user, dataset_name=dataset.name)
+        response = JsonResponse(data, status=200)
+        response["Content-Disposition"] = (
+            f'attachment; filename="logsight_report_{dataset_id}.json"'
+        )
+        return response
+
+    # Default: CSV
+    csv_text = generate_csv_report(dataset_id, owner=request.user, dataset_name=dataset.name)
+    response = HttpResponse(csv_text, content_type="text/csv; charset=utf-8")
+    response["Content-Disposition"] = (
+        f'attachment; filename="logsight_report_{dataset_id}.csv"'
+    )
+    return response
+
+
+# ---------------------------------------------------------------------------
+# Dashboard preferences view
+# ---------------------------------------------------------------------------
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def dashboard_preferences_view(request: HttpRequest) -> JsonResponse:
+    """
+    GET  /logs/preferences/  — retrieve the current user's dashboard preferences.
+    POST /logs/preferences/  — save preferences.
+
+    POST body (JSON):
+    {
+        "hidden_widgets": ["stat-latency", "chart-traffic"],
+        "preferences": { "default_interval": "day" }
+    }
+    """
+    from logs.models import DashboardPreference
+
+    if request.method == "GET":
+        pref, _ = DashboardPreference.objects.get_or_create(user=request.user)
+        return JsonResponse(
+            {
+                "hidden_widgets": pref.hidden_widgets,
+                "preferences":    pref.preferences,
+                "updated_at":     pref.updated_at.isoformat() if pref.updated_at else None,
+            },
+            status=200,
+        )
+
+    try:
+        body = json.loads(request.body)
+    except (ValueError, KeyError):
+        return JsonResponse({"error": "Invalid JSON body."}, status=400)
+
+    pref, _ = DashboardPreference.objects.get_or_create(user=request.user)
+    if "hidden_widgets" in body:
+        pref.hidden_widgets = body["hidden_widgets"] if isinstance(body["hidden_widgets"], list) else []
+    if "preferences" in body:
+        pref.preferences = body["preferences"] if isinstance(body["preferences"], dict) else {}
+    pref.save()
+
+    return JsonResponse(
+        {
+            "saved":          True,
+            "hidden_widgets": pref.hidden_widgets,
+            "preferences":    pref.preferences,
         },
         status=200,
     )

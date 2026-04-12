@@ -592,7 +592,6 @@
       var d = result.data;
       var items = Array.isArray(d.items) ? d.items.map(normalizeLogLine) : [];
 
-      // Backend uses snake_case: page_size, total_pages.
       var resolvedPageSize = d.page_size || d.pageSize || pageSize;
       var totalPages       = d.total_pages || d.totalPages || 1;
 
@@ -605,6 +604,138 @@
         pageSize: resolvedPageSize,
         totalPages: totalPages,
       };
+    },
+
+    // ---- Traffic forecasting ------------------------------------------------
+
+    /**
+     * Fetch a traffic forecast for *datasetId*.
+     * @param {string} datasetId
+     * @param {object} params  { periods: int, method: "moving_avg"|"linear_regression" }
+     */
+    async getTrafficForecast(datasetId, params) {
+      var id = datasetId || _currentDatasetId;
+      if (!id) return { available: false, historical: [], forecast: [], trend: "stable", summary: {} };
+
+      var p = params || {};
+      var url = "/logs/datasets/" + encodeURIComponent(id) + "/forecast/?" +
+        "periods=" + encodeURIComponent(p.periods || 24) +
+        "&method=" + encodeURIComponent(p.method || "moving_avg");
+
+      var result = await fetchJson(url, { method: "GET" });
+      if (!result.ok || !result.data) {
+        return { available: false, historical: [], forecast: [], trend: "stable", summary: {} };
+      }
+      return { available: true, ...result.data };
+    },
+
+    // ---- Anomaly detection --------------------------------------------------
+
+    /**
+     * Run anomaly detection for *datasetId*.
+     * @param {string} datasetId
+     * @param {object} params  { sensitivity: "low"|"medium"|"high" }
+     */
+    async getAnomalies(datasetId, params) {
+      var id = datasetId || _currentDatasetId;
+      if (!id) return { available: false, anomalies: [], summary: { total_anomalies: 0 } };
+
+      var sensitivity = (params && params.sensitivity) || "medium";
+      var url = "/logs/datasets/" + encodeURIComponent(id) + "/anomalies/" +
+        "?sensitivity=" + encodeURIComponent(sensitivity);
+
+      var result = await fetchJson(url, { method: "GET" });
+      if (!result.ok || !result.data) {
+        return { available: false, anomalies: [], summary: { total_anomalies: 0 } };
+      }
+      return { available: true, ...result.data };
+    },
+
+    // ---- Alerts -------------------------------------------------------------
+
+    /** List alert rules and recent history for *datasetId*. */
+    async getAlerts(datasetId) {
+      var id = datasetId || _currentDatasetId;
+      if (!id) return { rules: [], recent_alerts: [] };
+
+      var result = await fetchJson("/logs/datasets/" + encodeURIComponent(id) + "/alerts/", { method: "GET" });
+      if (!result.ok || !result.data) return { rules: [], recent_alerts: [] };
+      return result.data;
+    },
+
+    /** Create a new alert rule. */
+    async createAlertRule(datasetId, data) {
+      var id = datasetId || _currentDatasetId;
+      if (!id) throw new Error("No dataset selected.");
+
+      var result = await fetchJson(
+        "/logs/datasets/" + encodeURIComponent(id) + "/alerts/",
+        { method: "POST", body: JSON.stringify(data), headers: { "Content-Type": "application/json" } }
+      );
+      if (!result.ok) throw new Error("Failed to create alert rule.");
+      return result.data;
+    },
+
+    /** Delete an alert rule by ID. */
+    async deleteAlertRule(datasetId, ruleId) {
+      var id = datasetId || _currentDatasetId;
+      if (!id) throw new Error("No dataset selected.");
+
+      var result = await fetchJson(
+        "/logs/datasets/" + encodeURIComponent(id) + "/alerts/" + encodeURIComponent(ruleId) + "/",
+        { method: "DELETE" }
+      );
+      if (!result.ok) throw new Error("Failed to delete alert rule.");
+      return result.data;
+    },
+
+    /** Check active alert rules against current dataset metrics. */
+    async checkAlerts(datasetId) {
+      var id = datasetId || _currentDatasetId;
+      if (!id) throw new Error("No dataset selected.");
+
+      var result = await fetchJson(
+        "/logs/datasets/" + encodeURIComponent(id) + "/alerts/check/",
+        { method: "POST" }
+      );
+      if (!result.ok) throw new Error("Alert check failed.");
+      return result.data;
+    },
+
+    // ---- Reports ------------------------------------------------------------
+
+    /**
+     * Trigger a report download by navigating the browser to the report URL.
+     * The backend responds with Content-Disposition: attachment so the browser
+     * saves the file directly without changing the page.
+     *
+     * @param {string} datasetId
+     * @param {string} format "csv" | "json"
+     */
+    downloadReport(datasetId, format) {
+      var id = datasetId || _currentDatasetId;
+      if (!id) throw new Error("No dataset selected.");
+      var fmt = (format || "csv").toLowerCase();
+      window.location.href = "/logs/datasets/" + encodeURIComponent(id) + "/report/?format=" + encodeURIComponent(fmt);
+    },
+
+    // ---- Dashboard preferences ----------------------------------------------
+
+    /** Fetch the current user's dashboard preferences. */
+    async getPreferences() {
+      var result = await fetchJson("/logs/preferences/", { method: "GET" });
+      if (!result.ok || !result.data) return { hidden_widgets: [], preferences: {} };
+      return result.data;
+    },
+
+    /** Save dashboard preferences to the backend. */
+    async savePreferences(data) {
+      var result = await fetchJson(
+        "/logs/preferences/",
+        { method: "POST", body: JSON.stringify(data), headers: { "Content-Type": "application/json" } }
+      );
+      if (!result.ok) throw new Error("Failed to save preferences.");
+      return result.data;
     },
   };
 })(typeof window !== "undefined" ? window : globalThis);
