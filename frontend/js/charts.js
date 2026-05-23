@@ -46,15 +46,15 @@
     const dark = document.documentElement.classList.contains("dark");
     return {
       dark: dark,
-      text: dark ? "#e2e8f0" : "#334155",
-      textMuted: dark ? "#94a3b8" : "#64748b",
-      grid: dark ? "rgba(148,163,184,0.12)" : "rgba(148,163,184,0.25)",
-      primary: "#6366f1",
-      primarySoft: dark ? "rgba(99,102,241,0.25)" : "rgba(99,102,241,0.15)",
-      accent: "#22d3ee",
-      danger: "#f87171",
-      warn: "#fbbf24",
-      success: "#34d399",
+      text: dark ? "#e6edf3" : "#16202a",
+      textMuted: dark ? "#94a3b1" : "#607080",
+      grid: dark ? "rgba(148,163,184,0.13)" : "rgba(96,112,128,0.18)",
+      primary: "#0891b2",
+      primarySoft: dark ? "rgba(8,145,178,0.24)" : "rgba(8,145,178,0.14)",
+      accent: "#14b8a6",
+      danger: "#dc2626",
+      warn: "#d97706",
+      success: "#059669",
     };
   }
 
@@ -63,7 +63,7 @@
     return {
       responsive: true,
       maintainAspectRatio: false,
-      animation: { duration: 900, easing: "easeOutQuart" },
+      animation: { duration: 520, easing: "easeOutQuart" },
       plugins: {
         legend: {
           labels: { color: c.text, font: { family: "'Inter', system-ui, sans-serif", size: 11 } },
@@ -218,7 +218,7 @@
             data: values,
             backgroundColor: values.map(function (_, index) {
               const alpha = 0.85 - (index % 4) * 0.1;
-              return c.dark ? "rgba(129,140,248," + alpha + ")" : "rgba(79,70,229," + alpha + ")";
+              return c.dark ? "rgba(20,184,166," + alpha + ")" : "rgba(8,145,178," + alpha + ")";
             }),
             borderRadius: 6,
             borderSkipped: false,

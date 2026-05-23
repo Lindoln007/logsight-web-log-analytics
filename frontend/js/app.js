@@ -68,16 +68,16 @@
 
   function buildStatusBadge(status) {
     var v = String(status || "pending").toLowerCase();
-    if (v === "completed")  return "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300";
-    if (v === "failed")     return "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300";
-    if (v === "processing") return "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300";
-    return "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300";
+    if (v === "completed")  return "border border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-300";
+    if (v === "failed")     return "border border-red-200 bg-red-50 text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300";
+    if (v === "processing") return "border border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300";
+    return "border border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300";
   }
 
   function severityBadge(sev) {
-    if (sev === "high")   return "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300";
-    if (sev === "medium") return "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300";
-    return "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400";
+    if (sev === "high")   return "border border-red-200 bg-red-50 text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300";
+    if (sev === "medium") return "border border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300";
+    return "border border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400";
   }
 
   // Convert an ISO timestamp to the value expected by <input type="datetime-local">
@@ -116,7 +116,7 @@
   function applyTheme(dark) {
     document.documentElement.classList.toggle("dark", dark);
     var meta = $("#theme-color-meta");
-    if (meta) meta.setAttribute("content", dark ? "#0f172a" : "#f8fafc");
+    if (meta) meta.setAttribute("content", dark ? "#0d1319" : "#101820");
   }
 
   // -------------------------------------------------------------------------
@@ -222,6 +222,7 @@
     $all("[data-route]").forEach(function (link) {
       var active = link.getAttribute("data-route") === route;
       link.classList.toggle("bg-indigo-600/15",   active);
+      link.classList.toggle("is-active-route",     active);
       link.classList.toggle("text-indigo-600",     active);
       link.classList.toggle("dark:text-indigo-400", active);
       link.classList.toggle("text-slate-600",      !active);
@@ -574,7 +575,7 @@
 
     rows.forEach(function (dataset, index) {
       var tr = document.createElement("tr");
-      tr.className = "table-row-animate border-b border-slate-100 transition-colors hover:bg-slate-50/80 dark:border-slate-800 dark:hover:bg-slate-800/50";
+      tr.className = "table-row-animate border-b border-slate-100 transition-colors hover:bg-cyan-50/60 dark:border-slate-800 dark:hover:bg-cyan-950/20";
       tr.style.animationDelay = index * 40 + "ms";
 
       var entriesText = dataset.totalEntries != null ? Number(dataset.totalEntries).toLocaleString() : "—";
@@ -582,14 +583,14 @@
       tr.innerHTML =
         '<td class="px-4 py-3 font-mono text-xs text-slate-600 dark:text-slate-400">' + escapeHtml(dataset.id) + "</td>" +
         '<td class="px-4 py-3 font-medium text-slate-800 dark:text-slate-100">' + escapeHtml(dataset.name) + "</td>" +
-        '<td class="px-4 py-3"><span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300">' + escapeHtml(dataset.source) + "</span></td>" +
+        '<td class="px-4 py-3"><span class="inline-flex items-center rounded border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-medium text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">' + escapeHtml(dataset.source) + "</span></td>" +
         '<td class="px-4 py-3 text-slate-600 dark:text-slate-400">' + escapeHtml(formatBytes(dataset.sizeBytes)) + "</td>" +
         '<td class="px-4 py-3 tabular-nums text-slate-600 dark:text-slate-400">' + escapeHtml(entriesText) + "</td>" +
         '<td class="px-4 py-3 text-slate-600 dark:text-slate-400">' + escapeHtml(formatDate(dataset.uploadedAt)) + "</td>" +
         '<td class="px-4 py-3 text-right whitespace-nowrap">' +
           '<div class="inline-flex items-center gap-2">' +
           '<span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ' + buildStatusBadge(dataset.status) + '">' + escapeHtml(dataset.status) + "</span>" +
-          '<button type="button" data-analyse-ds="' + escapeHtml(dataset.id) + '" class="inline-flex items-center rounded-lg border border-indigo-200 px-2.5 py-1 text-xs font-medium text-indigo-600 transition-colors hover:bg-indigo-50 dark:border-indigo-800 dark:text-indigo-400 dark:hover:bg-indigo-950/50"' +
+          '<button type="button" data-analyse-ds="' + escapeHtml(dataset.id) + '" class="inline-flex items-center rounded-lg border border-cyan-200 px-2.5 py-1 text-xs font-medium text-cyan-700 transition-colors hover:bg-cyan-50 dark:border-cyan-900/60 dark:text-cyan-300 dark:hover:bg-cyan-950/40"' +
           (dataset.status !== "completed" ? ' disabled title="Dataset not yet completed"' : "") + ">Analyse</button>" +
           '<button type="button" data-view-ds="' + escapeHtml(dataset.id) + '" class="inline-flex items-center rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800/80">View</button>' +
           '<button type="button" data-del-ds="' + escapeHtml(dataset.id) + '" class="inline-flex items-center rounded-lg border border-red-200 px-2.5 py-1 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 dark:border-red-900/50 dark:text-red-400 dark:hover:bg-red-950/30">Delete</button>' +
@@ -769,10 +770,10 @@
       tr.style.animationDelay = index * 25 + "ms";
 
       var code = Number(line.status || 0);
-      var badgeClass = "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300";
-      if (code >= 500)      badgeClass = "bg-red-100 text-red-800 dark:bg-red-950/50 dark:text-red-300";
-      else if (code >= 400) badgeClass = "bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300";
-      else if (code >= 200) badgeClass = "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300";
+      var badgeClass = "border border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300";
+      if (code >= 500)      badgeClass = "border border-red-200 bg-red-50 text-red-800 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300";
+      else if (code >= 400) badgeClass = "border border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300";
+      else if (code >= 200) badgeClass = "border border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-300";
 
       tr.innerHTML =
         '<td class="whitespace-nowrap px-3 py-2 text-slate-500 dark:text-slate-400">' + escapeHtml(formatDate(line.timestamp)) + "</td>" +

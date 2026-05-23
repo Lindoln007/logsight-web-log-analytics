@@ -5,45 +5,82 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{% block title %}LogSight{% endblock %}</title>
     <link rel="icon" type="image/png" href="/assets/logsight-logo.png?v=20260330c" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
     <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="/css/styles.css?v=20260330b" />
+    <link rel="stylesheet" href="/css/styles.css?v=20260523-v4" />
   </head>
-  <body class="min-h-screen bg-slate-100 text-slate-900 antialiased">
-    <div class="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(99,102,241,0.14),_transparent_42%),linear-gradient(180deg,_#f8fafc_0%,_#eef2ff_100%)]">
-      <header class="mx-auto flex w-full max-w-6xl items-center justify-between px-6 py-5">
-        <a href="/" class="flex items-center gap-3 text-slate-900">
-          <span class="brand-mark-shell shrink-0">
-            <img src="/assets/logsight-logo.png?v=20260330c" alt="" class="brand-mark-image" />
-          </span>
-          <span class="text-lg font-semibold">LogSight</span>
-        </a>
-        <nav class="flex items-center gap-3 text-sm">
-          {% if user.is_authenticated %}
-            <a href="{% url 'accounts:profile' %}" class="rounded-lg px-3 py-2 text-slate-700 transition hover:bg-white/70">Profile</a>
-            <form method="post" action="{% url 'accounts:logout' %}">
-              {% csrf_token %}
-              <button type="submit" class="rounded-lg bg-slate-900 px-4 py-2 font-medium text-white transition hover:bg-slate-800">Logout</button>
-            </form>
-          {% else %}
-            <a href="{% url 'accounts:login' %}" class="rounded-lg px-3 py-2 text-slate-700 transition hover:bg-white/70">Login</a>
-            <a href="{% url 'accounts:register' %}" class="rounded-lg bg-slate-900 px-4 py-2 font-medium text-white transition hover:bg-slate-800">Create account</a>
-          {% endif %}
-        </nav>
-      </header>
-      <main class="mx-auto flex min-h-[calc(100vh-88px)] w-full max-w-6xl items-center justify-center px-6 py-10">
-        <div class="w-full max-w-md rounded-3xl border border-white/60 bg-white/85 p-8 shadow-2xl shadow-slate-300/40 backdrop-blur">
-          {% if messages %}
-            <div class="mb-4 space-y-2">
-              {% for message in messages %}
-                <div class="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-700">
-                  {{ message }}
-                </div>
-              {% endfor %}
-            </div>
-          {% endif %}
-          {% block content %}{% endblock %}
+  <body class="auth-shell font-sans antialiased">
+    <header class="mx-auto flex w-full max-w-6xl items-center justify-between px-5 py-5 sm:px-6">
+      <a href="/" class="flex items-center gap-3 text-white">
+        <span class="brand-mark-shell shrink-0">
+          <img src="/assets/logsight-logo.png?v=20260330c" alt="" class="brand-mark-image" />
+        </span>
+        <span class="brand-title">
+          <span class="brand-title-primary">Log</span><span class="brand-title-secondary">Sight</span>
+        </span>
+      </a>
+      <nav class="flex items-center gap-2 text-sm">
+        {% if user.is_authenticated %}
+          <a href="{% url 'accounts:profile' %}" class="rounded-lg border border-white/10 px-3 py-2 font-medium text-slate-200 transition hover:bg-white/10">Profile</a>
+          <form method="post" action="{% url 'accounts:logout' %}">
+            {% csrf_token %}
+            <button type="submit" class="rounded-lg bg-cyan-600 px-4 py-2 font-semibold text-white transition hover:bg-cyan-500">Logout</button>
+          </form>
+        {% else %}
+          <a href="{% url 'accounts:login' %}" class="rounded-lg border border-white/10 px-3 py-2 font-medium text-slate-200 transition hover:bg-white/10">Login</a>
+          <a href="{% url 'accounts:register' %}" class="rounded-lg bg-cyan-600 px-4 py-2 font-semibold text-white transition hover:bg-cyan-500">Create account</a>
+        {% endif %}
+      </nav>
+    </header>
+
+    <main class="mx-auto grid min-h-[calc(100vh-88px)] w-full max-w-6xl items-center gap-8 px-5 py-8 sm:px-6 lg:grid-cols-[1fr_26rem]">
+      <section class="hidden lg:block">
+        <div class="max-w-xl">
+          <h1 class="text-4xl font-semibold leading-tight text-white">Inspect logs with analyst-grade clarity.</h1>
+          <p class="mt-4 max-w-lg text-base leading-7 text-slate-300">
+            LogSight turns uploaded server logs into searchable records, operational signals, anomaly reports, and exportable summaries.
+          </p>
         </div>
-      </main>
-    </div>
+        <div class="auth-visual mt-8 p-5">
+          <div class="mb-4 flex items-center justify-between border-b border-white/10 pb-3">
+            <span class="text-xs font-semibold uppercase tracking-wider text-cyan-200">Live parse preview</span>
+            <span class="text-xs text-slate-400">last 24h</span>
+          </div>
+          <div class="auth-log-line"><span>10:42</span><strong>200</strong><span>GET /api/datasets</span></div>
+          <div class="auth-log-line"><span>10:43</span><strong>302</strong><span>POST /accounts/login</span></div>
+          <div class="auth-log-line"><span>10:44</span><strong>500</strong><span>POST /api/anomalies/run</span></div>
+          <div class="auth-log-line"><span>10:45</span><strong>404</strong><span>GET /assets/missing.map</span></div>
+          <div class="mt-5 grid grid-cols-3 gap-3 text-sm">
+            <div class="border border-white/10 bg-white/[0.03] p-3">
+              <p class="text-slate-400">Entries</p>
+              <p class="mt-1 font-mono text-lg font-semibold text-white">128k</p>
+            </div>
+            <div class="border border-white/10 bg-white/[0.03] p-3">
+              <p class="text-slate-400">Errors</p>
+              <p class="mt-1 font-mono text-lg font-semibold text-red-300">4.8%</p>
+            </div>
+            <div class="border border-white/10 bg-white/[0.03] p-3">
+              <p class="text-slate-400">Signals</p>
+              <p class="mt-1 font-mono text-lg font-semibold text-cyan-200">17</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="auth-panel w-full p-6 sm:p-8">
+        {% if messages %}
+          <div class="mb-4 space-y-2">
+            {% for message in messages %}
+              <div class="rounded-lg border border-cyan-200 bg-cyan-50 px-4 py-3 text-sm text-cyan-800">
+                {{ message }}
+              </div>
+            {% endfor %}
+          </div>
+        {% endif %}
+        {% block content %}{% endblock %}
+      </section>
+    </main>
   </body>
 </html>

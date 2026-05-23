@@ -5,14 +5,14 @@
 {% block content %}
   <div class="space-y-6">
     <div>
-      <h1 class="text-2xl font-semibold tracking-tight text-slate-950">Welcome back</h1>
-      <p class="mt-2 text-sm text-slate-600">Sign in to access your datasets, analytics, and log viewer.</p>
+      <h1 class="text-2xl font-semibold text-slate-950">Welcome back</h1>
+      <p class="mt-2 text-sm leading-6 text-slate-600">Sign in to continue your log analysis workspace.</p>
     </div>
 
     <form method="post" class="space-y-4">
       {% csrf_token %}
       {% if form.non_field_errors %}
-        <div class="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {% for error in form.non_field_errors %}{{ error }}{% endfor %}
         </div>
       {% endif %}
@@ -33,14 +33,14 @@
         {% endif %}
       </div>
 
-      <button type="submit" class="w-full rounded-xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-indigo-500">
+      <button type="submit" class="w-full rounded-lg bg-cyan-700 px-4 py-3 text-sm font-semibold text-white transition hover:bg-cyan-600">
         Login
       </button>
     </form>
 
     <p class="text-sm text-slate-600">
       Don’t have an account?
-      <a href="{% url 'accounts:register' %}" class="font-medium text-indigo-600 hover:text-indigo-500">Create one</a>
+      <a href="{% url 'accounts:register' %}" class="font-medium text-cyan-700 hover:text-cyan-600">Create one</a>
     </p>
   </div>
 {% endblock %}
