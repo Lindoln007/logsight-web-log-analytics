@@ -1,12 +1,10 @@
 /**
- * LogSight SPA — routing, theme, sidebar, uploads, datasets,
+ * LogSight SPA — routing, top navigation, uploads, datasets,
  * dashboard, log viewer, forecasting, anomaly detection, alerts, reports.
  */
 (function () {
   "use strict";
 
-  var THEME_KEY    = "log-sight-theme";
-  var SIDEBAR_KEY  = "log-sight-sidebar-collapsed";
   var PREFS_KEY    = "log-sight-prefs";           // localStorage fallback for preferences
   var routes       = ["dashboard", "upload", "datasets", "viewer",
                       "forecast", "anomalies", "alerts", "reports"];
@@ -97,109 +95,67 @@
   // -------------------------------------------------------------------------
 
   function initTheme() {
-    var stored     = localStorage.getItem(THEME_KEY);
-    var prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-    var dark       = stored === "dark" || (stored !== "light" && prefersDark);
-    applyTheme(dark);
-    var btn = $("#theme-toggle");
-    if (btn) {
-      btn.addEventListener("click", function () {
-        var isDark = document.documentElement.classList.toggle("dark");
-        localStorage.setItem(THEME_KEY, isDark ? "dark" : "light");
-        applyTheme(isDark);
-        // Redraw dashboard charts to pick up new theme colours.
-        if (getHashRoute() === "dashboard") loadDashboardCharts();
-      });
-    }
+    localStorage.setItem("log-sight-theme", "light");
+    applyTheme(false);
   }
 
   function applyTheme(dark) {
-    document.documentElement.classList.toggle("dark", dark);
+    document.documentElement.classList.remove("dark");
     var meta = $("#theme-color-meta");
-    if (meta) meta.setAttribute("content", dark ? "#0d1319" : "#101820");
+    if (meta) meta.setAttribute("content", "#eef2f5");
   }
 
   // -------------------------------------------------------------------------
-  // Sidebar
+  // Top navigation
   // -------------------------------------------------------------------------
 
-  function initSidebar() {
-    var collapsed  = localStorage.getItem(SIDEBAR_KEY) === "1";
-    var aside      = $("#sidebar");
-    var main       = $("#main-shell");
-    var toggle     = $("#sidebar-toggle");
-    var mobileBtn  = $("#sidebar-mobile-toggle");
-    var backdrop   = $("#sidebar-backdrop");
-    var mq         = window.matchMedia("(min-width: 1024px)");
+  function initTopNavigation() {
+    var nav = $(".top-nav");
+    var bubble = $("#nav-hover-bubble");
+    var mobileBtn = $("#mobile-nav-toggle");
+    var mobilePanel = $("#mobile-nav-panel");
 
-    function isDesktop() { return mq.matches; }
-
-    function closeMobileDrawer() {
-      if (!aside || !backdrop) return;
-      aside.classList.add("-translate-x-full");
-      backdrop.classList.add("hidden");
-    }
-    function openMobileDrawer() {
-      if (!aside || !backdrop) return;
-      aside.classList.remove("-translate-x-full");
-      backdrop.classList.remove("hidden");
+    function moveBubble(target) {
+      if (!nav || !bubble || !target) return;
+      var navBox = nav.getBoundingClientRect();
+      var box = target.getBoundingClientRect();
+      bubble.style.left = (box.left - navBox.left) + "px";
+      bubble.style.width = box.width + "px";
+      bubble.style.opacity = "1";
     }
 
-    function apply(c) {
-      if (!aside || !main) return;
-      if (isDesktop()) {
-        aside.classList.toggle("w-64",    !c);
-        aside.classList.toggle("w-[72px]", c);
-        main.classList.toggle("lg:pl-64",    !c);
-        main.classList.toggle("lg:pl-[72px]", c);
-      } else {
-        aside.classList.remove("w-[72px]");
-        aside.classList.add("w-64");
-      }
-      $all("[data-sidebar-text]").forEach(function (el) {
-        var hide = c && isDesktop();
-        el.classList.toggle("opacity-0",        hide);
-        el.classList.toggle("pointer-events-none", hide);
-        el.classList.toggle("w-0",              hide);
-        el.classList.toggle("overflow-hidden",  hide);
+    if (nav && bubble) {
+      $all("[data-nav-item]", nav).forEach(function (item) {
+        var target = item.classList.contains("top-nav-group") ? $(".top-nav-link", item) : item;
+        item.addEventListener("mouseenter", function () { moveBubble(target); });
+        item.addEventListener("focusin", function () { moveBubble(target); });
       });
-      aside.setAttribute("aria-expanded", c ? "false" : "true");
-    }
-
-    apply(collapsed);
-    if (!isDesktop()) closeMobileDrawer();
-
-    if (toggle) {
-      toggle.addEventListener("click", function () {
-        if (!isDesktop()) return;
-        var next = !aside.classList.contains("w-[72px]");
-        localStorage.setItem(SIDEBAR_KEY, next ? "1" : "0");
-        apply(next);
+      nav.addEventListener("mouseleave", function () {
+        var active = $(".top-nav-link.is-active-route", nav);
+        if (active) moveBubble(active);
+        else bubble.style.opacity = "0";
+      });
+      window.addEventListener("resize", function () {
+        var active = $(".top-nav-link.is-active-route", nav);
+        if (active) moveBubble(active);
       });
     }
 
-    var brandLink = document.getElementById("sidebar-brand");
-    if (brandLink) {
-      brandLink.addEventListener("click", function (e) {
-        if (!isDesktop()) return;
-        if (localStorage.getItem(SIDEBAR_KEY) === "1") {
-          e.preventDefault();
-          e.stopPropagation();
-          localStorage.setItem(SIDEBAR_KEY, "0");
-          apply(false);
-        }
+    function closeMobileNav() {
+      if (mobilePanel) mobilePanel.classList.remove("is-open");
+    }
+
+    if (mobileBtn && mobilePanel) {
+      mobileBtn.addEventListener("click", function () {
+        mobilePanel.classList.toggle("is-open");
       });
     }
 
-    if (mobileBtn) mobileBtn.addEventListener("click", openMobileDrawer);
-    if (backdrop)  backdrop.addEventListener("click", closeMobileDrawer);
-
-    mq.addEventListener("change", function () {
-      if (isDesktop()) { closeMobileDrawer(); apply(localStorage.getItem(SIDEBAR_KEY) === "1"); }
-      else             { apply(false); closeMobileDrawer(); }
-    });
-
-    window.closeMobileSidebar = closeMobileDrawer;
+    window.closeMobileSidebar = closeMobileNav;
+    window.refreshNavBubble = function () {
+      var active = $(".top-nav-link.is-active-route", nav);
+      if (active) moveBubble(active);
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -221,15 +177,18 @@
   function updateNavActive(route) {
     $all("[data-route]").forEach(function (link) {
       var active = link.getAttribute("data-route") === route;
-      link.classList.toggle("bg-indigo-600/15",   active);
       link.classList.toggle("is-active-route",     active);
-      link.classList.toggle("text-indigo-600",     active);
-      link.classList.toggle("dark:text-indigo-400", active);
-      link.classList.toggle("text-slate-600",      !active);
-      link.classList.toggle("dark:text-slate-400", !active);
-      link.classList.toggle("hover:bg-slate-100",  !active);
-      link.classList.toggle("dark:hover:bg-slate-800/80", !active);
     });
+    var section = "";
+    if (["upload", "datasets", "viewer"].indexOf(route) >= 0) section = "data";
+    if (["forecast", "anomalies", "reports"].indexOf(route) >= 0) section = "analytics";
+    if (route === "alerts") section = "monitoring";
+    $all("[data-nav-section]").forEach(function (group) {
+      var active = group.getAttribute("data-nav-section") === section;
+      var trigger = $(".top-nav-link", group);
+      if (trigger) trigger.classList.toggle("is-active-route", active);
+    });
+    if (typeof window.refreshNavBubble === "function") window.refreshNavBubble();
   }
 
   function showView(route) {
@@ -1282,7 +1241,7 @@
 
   document.addEventListener("DOMContentLoaded", function () {
     initTheme();
-    initSidebar();
+    initTopNavigation();
     initUpload();
     bindNav();
     initDashboardControls();

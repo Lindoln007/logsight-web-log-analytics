@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="LogSight — web-based log analytics and visualization interface" />
-    <meta id="theme-color-meta" name="theme-color" content="#101820" />
+    <meta id="theme-color-meta" name="theme-color" content="#eef2f5" />
     <title>LogSight — Log Analytics</title>
     <link rel="icon" type="image/png" href="assets/logsight-logo.png?v=20260330c" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -25,9 +25,9 @@
         },
       };
     </script>
-    <link rel="stylesheet" href="css/styles.css?v=20260523-v4" />
+    <link rel="stylesheet" href="css/styles.css?v=20260523-v4-topnav" />
   </head>
-  <body class="h-full min-h-screen bg-slate-50 text-slate-900 antialiased transition-colors duration-300 dark:bg-slate-950 dark:text-slate-100">
+  <body class="h-full min-h-screen bg-slate-50 text-slate-900 antialiased">
     {% if messages %}
       <div class="fixed right-4 top-4 z-50 w-full max-w-sm space-y-2">
         {% for message in messages %}
@@ -37,136 +37,93 @@
         {% endfor %}
       </div>
     {% endif %}
-    <div class="flex min-h-screen">
-      <div
-        id="sidebar-backdrop"
-        class="fixed inset-0 z-30 hidden bg-slate-900/50 backdrop-blur-sm transition-opacity lg:hidden"
-        aria-hidden="true"
-      ></div>
-
-      <!-- ================================================================ -->
-      <!-- Sidebar                                                           -->
-      <!-- ================================================================ -->
-      <aside
-        id="sidebar"
-        class="sidebar-transition fixed left-0 top-0 z-40 flex h-screen w-64 -translate-x-full flex-col border-r border-slate-200/80 bg-white/95 shadow-sm backdrop-blur transition-transform duration-300 dark:border-slate-800 dark:bg-slate-900/95 lg:translate-x-0"
-        aria-expanded="true"
-      >
-        <div class="flex h-16 items-center justify-between gap-2 border-b border-slate-200/80 px-4 dark:border-slate-800">
-          <a id="sidebar-brand" href="#/dashboard" class="flex min-w-0 flex-1 items-center gap-3">
+    <div class="min-h-screen">
+      <header class="app-topbar">
+        <div class="app-topbar-inner">
+          <a href="#/dashboard" data-route="dashboard" class="app-brand" aria-label="LogSight dashboard">
             <span class="brand-mark-shell shrink-0" aria-hidden="true">
               <img src="assets/logsight-logo.png?v=20260330c" alt="" class="brand-mark-image" />
             </span>
-            <span data-sidebar-text class="brand-title transition-opacity duration-200">
+            <span class="brand-title">
               <span class="brand-title-primary">Log</span><span class="brand-title-secondary">Sight</span>
             </span>
           </a>
-          <button
-            type="button"
-            id="sidebar-toggle"
-            class="hidden rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 dark:hover:bg-slate-800 dark:hover:text-slate-200 lg:inline-flex"
-            aria-label="Collapse sidebar"
-          >
-            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h7" />
-            </svg>
-          </button>
-        </div>
 
-        <nav class="flex-1 space-y-0.5 overflow-y-auto p-3" aria-label="Main">
-          <!-- Core -->
-          <p data-sidebar-text class="mb-1 mt-1 px-3 text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-600 transition-opacity duration-200">Core</p>
-          <a href="#/dashboard" data-route="dashboard" class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors bg-indigo-600/15 text-indigo-600 dark:text-indigo-400">
-            <svg class="h-5 w-5 shrink-0 opacity-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" /></svg>
-            <span data-sidebar-text class="transition-opacity duration-200">Dashboard</span>
-          </a>
-          <a href="#/upload" data-route="upload" class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800/80">
-            <svg class="h-5 w-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
-            <span data-sidebar-text class="transition-opacity duration-200">Upload Logs</span>
-          </a>
-          <a href="#/datasets" data-route="datasets" class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800/80">
-            <svg class="h-5 w-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" /></svg>
-            <span data-sidebar-text class="transition-opacity duration-200">Datasets</span>
-          </a>
-          <a href="#/viewer" data-route="viewer" class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800/80">
-            <svg class="h-5 w-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h7" /></svg>
-            <span data-sidebar-text class="transition-opacity duration-200">Log Viewer</span>
-          </a>
+          <nav class="top-nav" aria-label="Main workflow">
+            <span id="nav-hover-bubble" aria-hidden="true"></span>
+            <a href="#/dashboard" data-route="dashboard" data-nav-item class="top-nav-link">Dashboard</a>
+            <div class="top-nav-group" data-nav-item data-nav-section="data">
+              <button type="button" class="top-nav-link" aria-haspopup="true">Data</button>
+              <div class="nav-dropdown">
+                <a href="#/upload" data-route="upload">Upload Logs<span>Import Apache or Nginx files</span></a>
+                <a href="#/datasets" data-route="datasets">Datasets<span>Review processing status</span></a>
+                <a href="#/viewer" data-route="viewer">Log Viewer<span>Search, filter, and inspect rows</span></a>
+              </div>
+            </div>
+            <div class="top-nav-group" data-nav-item data-nav-section="analytics">
+              <button type="button" class="top-nav-link" aria-haspopup="true">Analytics</button>
+              <div class="nav-dropdown">
+                <a href="#/forecast" data-route="forecast">Forecasting<span>Predict traffic and load</span></a>
+                <a href="#/anomalies" data-route="anomalies">Anomalies<span>Detect unusual behavior</span></a>
+                <a href="#/reports" data-route="reports">Reports<span>Export operational summaries</span></a>
+              </div>
+            </div>
+            <div class="top-nav-group" data-nav-item data-nav-section="monitoring">
+              <button type="button" class="top-nav-link" aria-haspopup="true">Monitoring</button>
+              <div class="nav-dropdown nav-dropdown--compact">
+                <a href="#/alerts" data-route="alerts">Alerts<span>Rules, checks, and history</span></a>
+              </div>
+            </div>
+          </nav>
 
-          <!-- Analytics -->
-          <p data-sidebar-text class="mb-1 mt-4 px-3 text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-600 transition-opacity duration-200">Analytics</p>
-          <a href="#/forecast" data-route="forecast" class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800/80">
-            <svg class="h-5 w-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>
-            <span data-sidebar-text class="transition-opacity duration-200">Forecasting</span>
-          </a>
-          <a href="#/anomalies" data-route="anomalies" class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800/80">
-            <svg class="h-5 w-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
-            <span data-sidebar-text class="transition-opacity duration-200">Anomalies</span>
-          </a>
-          <a href="#/alerts" data-route="alerts" class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800/80">
-            <svg class="h-5 w-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>
-            <span data-sidebar-text class="transition-opacity duration-200">Alerts</span>
-          </a>
-          <a href="#/reports" data-route="reports" class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800/80">
-            <svg class="h-5 w-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-            <span data-sidebar-text class="transition-opacity duration-200">Reports</span>
-          </a>
-        </nav>
-      </aside>
-
-      <!-- ================================================================ -->
-      <!-- Main shell                                                        -->
-      <!-- ================================================================ -->
-      <div id="main-shell" class="flex min-h-screen flex-1 flex-col transition-[padding] duration-300 lg:pl-64">
-
-        <!-- Top bar -->
-        <header class="sticky top-0 z-30 flex h-16 items-center justify-between gap-4 border-b border-slate-200/80 bg-white/80 px-4 backdrop-blur dark:border-slate-800 dark:bg-slate-900/80 sm:px-6">
-          <div class="flex min-w-0 items-center gap-2 sm:gap-3">
-            <button
-              type="button"
-              id="sidebar-mobile-toggle"
-              class="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 lg:hidden"
-              aria-label="Open menu"
-            >
-              <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" /></svg>
-            </button>
-            <a href="#/dashboard" class="header-brand lg:hidden" aria-label="LogSight home">
-              <span class="brand-mark-shell brand-mark-shell--compact">
-                <img src="assets/logsight-logo.png?v=20260330c" alt="" class="brand-mark-image" />
-              </span>
-            </a>
-            <h1 id="page-title" class="truncate text-lg font-semibold text-slate-900 dark:text-white">Dashboard</h1>
-            <span id="stat-period" class="hidden rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-400 sm:inline">Last 24 hours</span>
-          </div>
-          <div class="flex items-center gap-2 sm:gap-3">
-            <button
-              type="button"
-              id="theme-toggle"
-              class="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-indigo-300 hover:text-indigo-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-indigo-500/50 dark:hover:text-indigo-400"
-              aria-label="Toggle dark mode"
-            >
-              <svg class="hidden h-5 w-5 dark:block" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" /></svg>
-              <svg class="h-5 w-5 dark:hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
-            </button>
-            <a
-              href="{% url 'accounts:profile' %}"
-              class="hidden rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 sm:inline-flex"
-            >
-              {{ request.user.username }}
-            </a>
+          <div class="topbar-actions">
+            <label class="global-search">
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35m1.1-5.15a6.25 6.25 0 11-12.5 0 6.25 6.25 0 0112.5 0z" /></svg>
+              <input type="search" placeholder="Search logs, datasets..." />
+            </label>
+            <a href="{% url 'accounts:profile' %}" class="profile-chip">{{ request.user.username }}</a>
             <form method="post" action="{% url 'accounts:logout' %}" class="inline-flex">
               {% csrf_token %}
-              <button
-                type="submit"
-                class="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
-              >
-                Logout
-              </button>
+              <button type="submit" class="logout-button">Logout</button>
             </form>
+            <button type="button" id="mobile-nav-toggle" class="mobile-nav-toggle" aria-label="Open navigation">
+              <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h16M4 12h16M4 17h16" /></svg>
+            </button>
           </div>
-        </header>
+        </div>
 
-        <main class="flex-1 p-4 sm:p-6 lg:p-7">
+        <div id="mobile-nav-panel" class="mobile-nav-panel">
+          <a href="#/dashboard" data-route="dashboard">Dashboard</a>
+          <p>Data</p>
+          <a href="#/upload" data-route="upload">Upload Logs</a>
+          <a href="#/datasets" data-route="datasets">Datasets</a>
+          <a href="#/viewer" data-route="viewer">Log Viewer</a>
+          <p>Analytics</p>
+          <a href="#/forecast" data-route="forecast">Forecasting</a>
+          <a href="#/anomalies" data-route="anomalies">Anomalies</a>
+          <a href="#/reports" data-route="reports">Reports</a>
+          <p>Monitoring</p>
+          <a href="#/alerts" data-route="alerts">Alerts</a>
+        </div>
+      </header>
+
+      <div id="main-shell" class="flex min-h-screen flex-col">
+        <section class="context-toolbar">
+          <div>
+            <p class="context-kicker">Workflow</p>
+            <div class="flex flex-wrap items-center gap-3">
+              <h1 id="page-title">Dashboard</h1>
+              <span id="stat-period">Last 24 hours</span>
+            </div>
+          </div>
+          <div class="context-actions">
+            <button type="button" class="context-control">24h</button>
+            <button type="button" class="context-control">Filters</button>
+            <button type="button" class="context-control">Export</button>
+          </div>
+        </section>
+
+        <main class="app-content flex-1">
 
           <!-- ============================================================ -->
           <!-- Dashboard                                                     -->
