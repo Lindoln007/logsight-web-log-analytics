@@ -1069,13 +1069,15 @@ def invites_view(request: HttpRequest) -> JsonResponse:
     email = (body.get("email") or "").strip().lower()
     role  = body.get("role", "analyst")
 
-    if not email:
-        return JsonResponse({"error": "Email is required."}, status=400)
+    send_email = bool(body.get("send_email", True))
+
+    if send_email and not email:
+        return JsonResponse({"error": "Email is required when sending an email invite."}, status=400)
     if role not in ("analyst", "viewer"):
         return JsonResponse({"error": "Role must be analyst or viewer."}, status=400)
 
     try:
-        invite = create_invite(email=email, role=role, invited_by=request.user)
+        invite = create_invite(email=email or None, role=role, invited_by=request.user, send_email=send_email)
     except Exception as exc:
         return JsonResponse({"error": str(exc)}, status=400)
 

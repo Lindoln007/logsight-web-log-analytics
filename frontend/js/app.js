@@ -2176,11 +2176,18 @@
       refreshBtn.addEventListener("click", function () { loadUsersTable(); loadInvitesList(); });
     }
 
-    var sendBtn = $("#invite-send");
-    if (sendBtn && !sendBtn._bound) {
-      sendBtn._bound = true;
-      sendBtn.addEventListener("click", sendInvite);
+    var emailBtn = $("#invite-send-email");
+    if (emailBtn && !emailBtn._bound) {
+      emailBtn._bound = true;
+      emailBtn.addEventListener("click", function () { sendInvite(true); });
     }
+    var tokenBtn = $("#invite-generate-token");
+    if (tokenBtn && !tokenBtn._bound) {
+      tokenBtn._bound = true;
+      tokenBtn.addEventListener("click", function () { sendInvite(false); });
+    }
+    // Bind role-token selector (independent of email form)
+
 
     loadUsersTable();
     loadInvitesList();
@@ -2188,6 +2195,11 @@
 
   function _buildInviteUrl(token) {
     return window.location.origin + "/accounts/register/?invite=" + encodeURIComponent(token);
+  }
+
+  function _shortToken(token) {
+    // Show the full UUID token — it's what the invitee types on the login page.
+    return token;
   }
 
   function _copyToClipboard(text, btn) {
@@ -2210,57 +2222,71 @@
     });
   }
 
-  async function sendInvite() {
+  async function sendInvite(sendEmail) {
     var emailIn  = $("#invite-email");
-    var roleIn   = $("#invite-role");
+    var roleIn   = sendEmail ? $("#invite-role-email") : $("#invite-role-token");
     var msgArea  = $("#invite-msg");
     var err      = $("#invite-err");
-    var btn      = $("#invite-send");
+    var emailBtn = $("#invite-send-email");
+    var tokenBtn = $("#invite-generate-token");
+    var activeBtn = sendEmail ? emailBtn : tokenBtn;
 
-    if (!emailIn || !emailIn.value.trim()) { window.alert("Enter an email address."); return; }
+    if (sendEmail && (!emailIn || !emailIn.value.trim())) {
+      window.alert("Enter an email address first."); return;
+    }
 
-    if (msgArea) msgArea.classList.add("hidden");
+    if (msgArea) msgArea.innerHTML = "";
     if (err)     err.classList.add("hidden");
-    if (btn)     { btn.disabled = true; btn.textContent = "Generating…"; }
+    if (activeBtn) { activeBtn.disabled = true; activeBtn.textContent = "Working…"; }
 
     try {
-      var data   = await LogSightAPI.createInvite(emailIn.value.trim(), roleIn ? roleIn.value : "analyst");
+      var emailVal = (sendEmail && emailIn) ? emailIn.value.trim() : "";
+      var data   = await LogSightAPI.createInvite(emailVal, roleIn ? roleIn.value : "analyst", sendEmail);
       var invite = data.invite;
-      var url    = _buildInviteUrl(invite.token);
+      var token  = invite.token;
 
-      // Replace the message area with a copyable URL box.
       if (msgArea) {
-        msgArea.className = "";  // clear any hidden class
-        msgArea.innerHTML =
-          '<div class="mt-3 rounded-xl border border-emerald-200 bg-emerald-50/80 p-3 dark:border-emerald-800/40 dark:bg-emerald-950/20">' +
-            '<p class="mb-2 text-xs font-semibold text-emerald-700 dark:text-emerald-300">Invite created for ' + escapeHtml(invite.email) + ' (' + escapeHtml(invite.role) + ')</p>' +
-            '<p class="mb-2 text-xs text-emerald-600 dark:text-emerald-400">Share this link with them — it expires in 7 days or after one use:</p>' +
-            '<div class="flex items-center gap-2">' +
-              '<input type="text" readonly value="' + escapeHtml(url) + '" ' +
-                'class="flex-1 min-w-0 rounded-lg border border-emerald-200 bg-white px-2.5 py-1.5 font-mono text-xs text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-emerald-400/30 dark:border-emerald-800/40 dark:bg-slate-900 dark:text-slate-300" />' +
-              '<button type="button" id="invite-copy-btn" class="shrink-0 rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-xs font-medium text-emerald-700 transition hover:bg-emerald-50 dark:border-emerald-700 dark:bg-slate-800 dark:text-emerald-300">Copy link</button>' +
-            '</div>' +
-          '</div>';
+        if (sendEmail) {
+          // Email sent — just confirm, no need to show the token.
+          msgArea.innerHTML =
+            '<div class="mt-3 rounded-xl border border-emerald-200 bg-emerald-50/80 p-3 dark:border-emerald-800/40 dark:bg-emerald-950/20">' +
+              '<p class="text-xs font-semibold text-emerald-700 dark:text-emerald-300">Email sent to ' + escapeHtml(invite.email) + '</p>' +
+              '<p class="mt-0.5 text-xs text-emerald-600 dark:text-emerald-400">They\'ll receive a registration link. The invite expires in 7 days.</p>' +
+            '</div>';
+        } else {
+          // No email — show the copyable token.
+          msgArea.innerHTML =
+            '<div class="mt-3 rounded-xl border border-indigo-200 bg-indigo-50/80 p-3 dark:border-indigo-800/40 dark:bg-indigo-950/20">' +
+              '<p class="mb-1 text-xs font-semibold text-indigo-700 dark:text-indigo-300">Token generated for ' + escapeHtml(invite.email) + ' (' + escapeHtml(invite.role) + ')</p>' +
+              '<p class="mb-2 text-xs text-indigo-600 dark:text-indigo-400">Share this code manually. They enter it on the login page under "Have an invite code?"</p>' +
+              '<div class="flex items-center gap-2">' +
+                '<input type="text" readonly value="' + escapeHtml(token) + '" ' +
+                  'class="flex-1 min-w-0 rounded-lg border border-indigo-200 bg-white px-2.5 py-1.5 font-mono text-xs text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-400/30 dark:border-indigo-800/40 dark:bg-slate-900 dark:text-slate-300" />' +
+                '<button type="button" id="invite-copy-btn" class="shrink-0 rounded-lg border border-indigo-300 bg-white px-3 py-1.5 text-xs font-medium text-indigo-700 transition hover:bg-indigo-50 dark:border-indigo-700 dark:bg-slate-800 dark:text-indigo-300">Copy code</button>' +
+              '</div>' +
+              '<p class="mt-1.5 text-[10px] text-indigo-400 dark:text-indigo-500">Expires in 7 days · single use</p>' +
+            '</div>';
 
-        var copyBtn = msgArea.querySelector("#invite-copy-btn");
-        if (copyBtn) {
-          copyBtn.addEventListener("click", function () { _copyToClipboard(url, copyBtn); });
+          var copyBtn = msgArea.querySelector("#invite-copy-btn");
+          if (copyBtn) copyBtn.addEventListener("click", function () { _copyToClipboard(token, copyBtn); });
+          var tokenInput = msgArea.querySelector("input");
+          if (tokenInput) tokenInput.addEventListener("click", function () { tokenInput.select(); });
         }
-        // Auto-select the URL when the input is clicked.
-        var urlInput = msgArea.querySelector("input");
-        if (urlInput) urlInput.addEventListener("click", function () { urlInput.select(); });
       }
 
-      emailIn.value = "";
+      if (sendEmail && emailIn) emailIn.value = "";
       loadInvitesList();
 
     } catch (e) {
       if (err) { err.textContent = e.message || "Failed to create invite."; err.classList.remove("hidden"); }
     } finally {
-      if (btn) {
-        btn.disabled = false;
-        btn.innerHTML =
-          '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg> Send Invite';
+      if (emailBtn) {
+        emailBtn.disabled = false;
+        emailBtn.innerHTML = '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg> Send Email';
+      }
+      if (tokenBtn) {
+        tokenBtn.disabled = false;
+        tokenBtn.innerHTML = '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" /></svg> Generate Token';
       }
     }
   }
@@ -2280,8 +2306,8 @@
       list.innerHTML = "";
 
       pending.forEach(function (inv) {
-        var url = _buildInviteUrl(inv.token);
-        var row = document.createElement("div");
+        var token = inv.token;
+        var row   = document.createElement("div");
         row.className = "space-y-2 px-5 py-4 border-b border-slate-100 last:border-0 dark:border-slate-800";
 
         var roleCls = inv.role === "analyst"
@@ -2294,19 +2320,20 @@
           '<div class="flex items-center justify-between gap-3">' +
             '<div class="min-w-0 flex-1">' +
               '<p class="text-sm font-medium text-slate-800 dark:text-slate-200">' + escapeHtml(inv.email) + '</p>' +
-              '<p class="mt-0.5 text-xs text-slate-400">Invited by ' + escapeHtml(inv.invited_by) + ' · expires ' + escapeHtml(expiresDate) + '</p>' +
+              '<p class="mt-0.5 text-xs text-slate-400">Role: ' + escapeHtml(inv.role) + ' · expires ' + escapeHtml(expiresDate) + '</p>' +
             '</div>' +
             '<span class="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ' + roleCls + '">' + escapeHtml(inv.role) + '</span>' +
             '<button type="button" data-revoke-id="' + inv.id + '" class="rounded-lg border border-red-200 px-2.5 py-1 text-xs font-medium text-red-600 transition hover:bg-red-50 dark:border-red-900/50 dark:text-red-400">Revoke</button>' +
           '</div>' +
           '<div class="flex items-center gap-2">' +
-            '<input type="text" readonly value="' + escapeHtml(url) + '" ' +
+            '<input type="text" readonly value="' + escapeHtml(token) + '" ' +
+              'title="Share this code — invitee enters it on the login page" ' +
               'class="flex-1 min-w-0 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 font-mono text-xs text-slate-600 focus:outline-none dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-400" />' +
-            '<button type="button" data-copy-url="' + escapeHtml(url) + '" class="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">Copy link</button>' +
+            '<button type="button" class="invite-copy-code shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">Copy code</button>' +
           '</div>';
 
         row.querySelector("[data-revoke-id]").addEventListener("click", async function () {
-          if (!confirm("Revoke this invite? The link will stop working immediately.")) return;
+          if (!confirm("Revoke this invite? The code will stop working immediately.")) return;
           try {
             await LogSightAPI.revokeInvite(inv.id);
             row.remove();
@@ -2316,12 +2343,12 @@
           }
         });
 
-        var copyBtn = row.querySelector("[data-copy-url]");
+        var copyBtn = row.querySelector(".invite-copy-code");
         if (copyBtn) {
-          copyBtn.addEventListener("click", function () { _copyToClipboard(url, copyBtn); });
+          copyBtn.addEventListener("click", function () { _copyToClipboard(token, copyBtn); });
         }
-        var urlInput = row.querySelector("input[readonly]");
-        if (urlInput) urlInput.addEventListener("click", function () { urlInput.select(); });
+        var tokenInput = row.querySelector("input[readonly]");
+        if (tokenInput) tokenInput.addEventListener("click", function () { tokenInput.select(); });
 
         list.appendChild(row);
       });

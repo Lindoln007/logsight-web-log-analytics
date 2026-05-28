@@ -894,28 +894,53 @@
             <p class="text-sm text-slate-600 dark:text-slate-400">Manage user accounts and assign roles. New users must be invited — they cannot self-register.</p>
 
             <!-- Invite form -->
-            <div id="users-invite-wrap" class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-              <h3 class="mb-4 text-sm font-semibold text-slate-800 dark:text-slate-200">Invite a new user</h3>
-              <div class="flex flex-wrap items-end gap-3">
-                <label class="block flex-1 min-w-48">
-                  <span class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Email address</span>
-                  <input id="invite-email" type="email" placeholder="colleague@example.com"
-                    class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
-                </label>
-                <label class="block">
-                  <span class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Role</span>
-                  <select id="invite-role" class="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
-                    <option value="analyst">Analyst</option>
-                    <option value="viewer">Viewer</option>
-                  </select>
-                </label>
-                <button type="button" id="invite-send" class="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:bg-indigo-500">
-                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
-                  Send Invite
-                </button>
+            <div id="users-invite-wrap" class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60 space-y-5">
+              <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Add a new user</h3>
+
+              <!-- Option A: Send email invite -->
+              <div class="rounded-xl border border-slate-200/80 p-4 dark:border-slate-700/60">
+                <p class="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Send email invite</p>
+                <div class="flex flex-wrap items-end gap-3">
+                  <label class="block flex-1 min-w-48">
+                    <span class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Email address</span>
+                    <input id="invite-email" type="email" placeholder="colleague@example.com"
+                      class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
+                  </label>
+                  <label class="block">
+                    <span class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Role</span>
+                    <select id="invite-role-email" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
+                      <option value="analyst">Analyst</option>
+                      <option value="viewer">Viewer</option>
+                    </select>
+                  </label>
+                  <button type="button" id="invite-send-email" class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
+                    Send Email
+                  </button>
+                </div>
               </div>
+
+              <!-- Option B: Generate token (no email needed) -->
+              <div class="rounded-xl border border-slate-200/80 p-4 dark:border-slate-700/60">
+                <p class="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Generate invite token</p>
+                <p class="mb-3 text-xs text-slate-500 dark:text-slate-400">No email required — copy the token and share it manually. The invitee enters their own details when they register.</p>
+                <div class="flex items-end gap-3">
+                  <label class="block">
+                    <span class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Role</span>
+                    <select id="invite-role-token" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
+                      <option value="analyst">Analyst</option>
+                      <option value="viewer">Viewer</option>
+                    </select>
+                  </label>
+                  <button type="button" id="invite-generate-token" class="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-3 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:bg-indigo-500">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" /></svg>
+                    Generate Token
+                  </button>
+                </div>
+              </div>
+
               <div id="invite-msg" class="hidden"></div>
-              <p id="invite-err" class="mt-2 hidden text-xs text-red-600 dark:text-red-400"></p>
+              <p id="invite-err" class="mt-1 hidden text-xs text-red-600 dark:text-red-400"></p>
             </div>
 
             <!-- Pending invites -->

@@ -468,7 +468,10 @@ class InviteToken(models.Model):
     ]
 
     token      = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
-    email      = models.EmailField(help_text="Email address this invite was sent to.")
+    email      = models.EmailField(
+        null=True, blank=True,
+        help_text="Email address this invite was sent to. Blank for token-only invites.",
+    )
     role       = models.CharField(
         max_length=20,
         choices=INVITABLE_ROLES,

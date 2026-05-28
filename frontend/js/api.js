@@ -850,12 +850,12 @@
       return result.data;
     },
 
-    async createInvite(email, role) {
+    async createInvite(email, role, sendEmail) {
       var result = await fetchJson("/logs/invites/", {
         method: "POST",
-        body: JSON.stringify({ email: email, role: role }),
+        body: JSON.stringify({ email: email, role: role, send_email: sendEmail !== false }),
       });
-      if (!result.ok) throw new Error((result.data && result.data.error) || "Failed to send invite.");
+      if (!result.ok) throw new Error((result.data && result.data.error) || "Failed to create invite.");
       return result.data;
     },
 

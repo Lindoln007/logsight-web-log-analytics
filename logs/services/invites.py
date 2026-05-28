@@ -21,23 +21,29 @@ _EXPIRY_DAYS = 7
 # Public API
 # ---------------------------------------------------------------------------
 
-def create_invite(email: str, role: str, invited_by) -> dict:
+def create_invite(email: str | None, role: str, invited_by, send_email: bool = True) -> dict:
     """
-    Create an InviteToken for *email*, send the invite email, and return
-    the serialised token.
+    Create an InviteToken and return the serialised token.
+
+    *email* is optional when send_email=False (token-only invite). When
+    provided for an email invite, any previous unused invites for that
+    address are expired so there is never more than one live token per email.
 
     Only admin users may call this; the caller is responsible for enforcing
     that check before calling this function.
     """
     from logs.models import InviteToken
 
-    email = email.strip().lower()
+    email = (email or "").strip().lower() or None
 
-    # Invalidate any previous unused invites for the same address so there
-    # is never more than one live token per email.
-    InviteToken.objects.filter(email=email, used=False).update(
-        expires_at=timezone.now()
-    )
+    if send_email and not email:
+        raise ValueError("An email address is required to send an email invite.")
+
+    # Expire previous unused invites for the same address (email invites only).
+    if email:
+        InviteToken.objects.filter(email=email, used=False).update(
+            expires_at=timezone.now()
+        )
 
     token = InviteToken.objects.create(
         email=email,
@@ -46,7 +52,8 @@ def create_invite(email: str, role: str, invited_by) -> dict:
         expires_at=timezone.now() + timedelta(days=_EXPIRY_DAYS),
     )
 
-    _send_invite_email(token)
+    if send_email:
+        _send_invite_email(token)
     logger.info(
         "Invite created: id=%s email=%s role=%s by user_id=%s",
         token.pk, email, role, invited_by.pk,

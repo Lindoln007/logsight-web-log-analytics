@@ -35,27 +35,31 @@ def register_view(request):
             "invite_invalid":  bool(token_str),  # True = bad token, False = none at all
         })
 
-    # Valid token → show the registration form pre-filled with the invited email.
+    # Valid token → show the registration form.
+    # If the token has an email pre-assigned, lock the field; otherwise let the invitee fill it.
+    has_fixed_email = bool(invite.email)
+
     if request.method == "POST":
         form = RegistrationForm(request.POST)
-        # Force the email to the invited address regardless of what was submitted.
-        form.data = form.data.copy()
-        form.data["email"] = invite.email
+        if has_fixed_email:
+            form.data = form.data.copy()
+            form.data["email"] = invite.email
 
         if form.is_valid():
             user = form.save(commit=False)
-            user.email = invite.email
+            if has_fixed_email:
+                user.email = invite.email
             user.save()
             redeem_invite(token_str, user)
             login(request, user)
             messages.success(request, f"Welcome to LogSight! You've been added as {invite.role.capitalize()}.")
             return redirect("app-shell")
     else:
-        form = RegistrationForm(initial={"email": invite.email})
+        form = RegistrationForm(initial={"email": invite.email or ""})
 
-    # Make the email field read-only — the invite address is fixed.
-    form.fields["email"].widget.attrs["readonly"] = True
-    form.fields["email"].widget.attrs["class"] += " opacity-60 cursor-not-allowed"
+    if has_fixed_email:
+        form.fields["email"].widget.attrs["readonly"] = True
+        form.fields["email"].widget.attrs["class"] += " opacity-60 cursor-not-allowed"
 
     return render(request, "accounts/register.html", {
         "form":        form,
@@ -63,6 +67,33 @@ def register_view(request):
         "token_str":   token_str,
         "invite_valid": True,
     })
+
+
+@require_http_methods(["GET", "POST"])
+def redeem_code_view(request):
+    """
+    GET/POST /accounts/redeem/
+    Validates an invite token entered on the login page and redirects
+    to the registration form with the token in the query string.
+    """
+    if request.user.is_authenticated:
+        return redirect("app-shell")
+
+    from logs.services.invites import validate_invite
+
+    error = None
+    if request.method == "POST":
+        code = request.POST.get("invite_code", "").strip()
+        if not code:
+            error = "Please enter your invite code."
+        else:
+            invite = validate_invite(code)
+            if invite:
+                return redirect(f"/accounts/register/?invite={code}")
+            else:
+                error = "That code is invalid or has already been used. Check with your admin."
+
+    return render(request, "accounts/login.html", {"show_invite_form": True, "invite_error": error})
 
 
 @require_http_methods(["POST"])
