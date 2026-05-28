@@ -243,6 +243,14 @@ body::before {
   transform: translate(-50%, 0) scale(1);
 }
 
+.top-nav-group.is-closing .nav-dropdown,
+.top-nav-group.is-closing:hover .nav-dropdown,
+.top-nav-group.is-closing:focus-within .nav-dropdown {
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -2px) scale(0.985);
+}
+
 .nav-dropdown a {
   display: grid;
   gap: 2px;
@@ -594,8 +602,6 @@ table {
 }
 
 thead {
-  position: sticky;
-  top: 154px;
   z-index: 10;
   background: rgba(247, 249, 251, 0.94) !important;
   backdrop-filter: blur(14px);
@@ -840,7 +846,5 @@ pre {
     padding-top: 18px;
   }
 
-  thead {
-    top: 0;
-  }
 }
+

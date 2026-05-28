@@ -151,7 +151,18 @@
       });
     }
 
+    function closeDropdowns() {
+      $all(".top-nav-group").forEach(function (group) {
+        group.classList.add("is-closing");
+        setTimeout(function () { group.classList.remove("is-closing"); }, 180);
+      });
+      if (document.activeElement && typeof document.activeElement.blur === "function") {
+        document.activeElement.blur();
+      }
+    }
+
     window.closeMobileSidebar = closeMobileNav;
+    window.closeTopNavMenus = closeDropdowns;
     window.refreshNavBubble = function () {
       var active = $(".top-nav-link.is-active-route", nav);
       if (active) moveBubble(active);
@@ -216,7 +227,7 @@
     var titleEl = $("#page-title");
     if (titleEl) titleEl.textContent = titles[route] || "Dashboard";
     var period = $("#stat-period");
-    if (period) period.classList.toggle("hidden", route !== "dashboard");
+    if (period) period.classList.toggle("hidden", ["viewer", "forecast", "anomalies", "reports"].indexOf(route) < 0);
     updateNavActive(route);
   }
 
@@ -354,9 +365,6 @@
     renderStatValue("stat-latency",  null, "", "Loading…");
     renderStatValue("stat-visitors", null, "", "Loading…");
 
-    var period = $("#stat-period");
-    if (period) { period.textContent = "Loading…"; period.classList.remove("hidden"); }
-
     await populateDashboardSelect();
     var id = LogSightAPI.getCurrentDataset();
 
@@ -365,7 +373,6 @@
       renderStatValue("stat-errors",   null, "", "—");
       renderStatValue("stat-latency",  null, "", "—");
       renderStatValue("stat-visitors", null, "", "—");
-      if (period) period.textContent = "Upload a log file to begin";
       if (typeof LogSightCharts !== "undefined") LogSightCharts.destroyAll();
       return;
     }
@@ -378,7 +385,6 @@
     renderStatValue("stat-visitors", summary.uniqueVisitors != null ? formatNumber(summary.uniqueVisitors) : null, "", "No data");
 
     if (summary.totalErrors != null) renderSubText("stat-errors-abs", formatNumber(summary.totalErrors));
-    if (period) period.textContent = summary.periodLabel || id;
 
     loadDashboardCharts(id);
   }
@@ -401,6 +407,26 @@
       LogSightCharts.renderTopEndpoints("chart-endpoints",    results[2]);
       LogSightCharts.renderTrafficArea("chart-traffic",       results[3]);
     });
+  }
+
+  async function updateStatPeriod(datasetId) {
+    var period = $("#stat-period");
+    if (!period) return;
+    if (!datasetId) { period.textContent = "Select a dataset"; return; }
+    try {
+      var result = await fetch(
+        "/logs/datasets/" + encodeURIComponent(datasetId) + "/analytics/summary/",
+        { credentials: "same-origin" }
+      );
+      if (!result.ok) return;
+      var data = await result.json();
+      var dr = data.date_range || {};
+      if (dr.start && dr.end) {
+        period.textContent = formatDate(dr.start) + " – " + formatDate(dr.end);
+      } else if (data.periodLabel) {
+        period.textContent = data.periodLabel;
+      }
+    } catch (_) {}
   }
 
   function initDashboardControls() {
@@ -759,8 +785,10 @@
       // Set date range from analytics before fetching logs.
       if (select && select.value) {
         setViewerDateRange(select.value).then(function () { fetchAndRenderLogs(); });
+        updateStatPeriod(select.value);
       } else {
         fetchAndRenderLogs();
+        updateStatPeriod("");
       }
     });
 
@@ -784,8 +812,10 @@
         if (hint) hint.classList.add("hidden");
         if (select.value) {
           setViewerDateRange(select.value).then(function () { fetchAndRenderLogs(); });
+          updateStatPeriod(select.value);
         } else {
           fetchAndRenderLogs();
+          updateStatPeriod("");
         }
       });
     }
@@ -891,6 +921,7 @@
       requestAnimationFrame(function () {
         LogSightCharts.renderForecastChart("chart-forecast", data);
       });
+      updateStatPeriod(dsSelect.value);
 
     } catch (err) {
       window.alert(err.message || "Forecast failed.");
@@ -972,6 +1003,7 @@
 
       // Render anomaly list.
       renderAnomalyList(data.anomalies || []);
+      updateStatPeriod(dsSelect.value);
 
     } catch (err) {
       window.alert(err.message || "Anomaly detection failed.");
@@ -1203,6 +1235,14 @@
   async function initReportsView() {
     await populateSelect("report-dataset");
 
+    var reportDataset = $("#report-dataset");
+    if (reportDataset && !reportDataset._bound_period) {
+      reportDataset._bound_period = true;
+      reportDataset.addEventListener("change", function () {
+        updateStatPeriod(reportDataset.value);
+      });
+    }
+
     var downloadBtn = $("#report-download");
     if (downloadBtn && !downloadBtn._bound) {
       downloadBtn._bound = true;
@@ -1228,6 +1268,7 @@
       link.addEventListener("click", function (event) {
         event.preventDefault();
         navigate(link.getAttribute("data-route"));
+        if (typeof window.closeTopNavMenus === "function") window.closeTopNavMenus();
         if (typeof window.closeMobileSidebar === "function" && window.matchMedia("(max-width: 1023px)").matches) {
           window.closeMobileSidebar();
         }
