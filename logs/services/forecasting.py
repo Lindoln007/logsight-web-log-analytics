@@ -1,13 +1,16 @@
 """
 Traffic forecasting service.
 
-Uses two simple statistical methods to predict future request volumes:
-  - Moving average  : average of the last N historical periods, extrapolated forward.
-  - Linear regression: fits y = mx + b to all historical data, extrapolates forward.
+Uses two methods to predict future request volumes:
+  - Seasonal pattern : averages traffic per hour-of-day from the full history,
+                       then projects those patterns forward with a trend adjustment.
+                       Produces a realistic wavy forecast that rises and falls with
+                       the dataset's natural daily rhythm.
+  - Linear regression: fits y = mx + b to all historical data and extrapolates.
+                       Good for showing a clean trend direction.
 
-Both approaches are implemented with pure Python (no external ML libraries) so the
-code is easy to read, explain in an academic context, and has zero additional
-dependencies.
+Both methods also return upper/lower confidence bands (±20 % of the forecast value).
+Pure Python — no external ML libraries required.
 """
 from __future__ import annotations
 
@@ -33,15 +36,14 @@ def get_traffic_forecast(
 
     Parameters
     ----------
-    periods : int
-        Number of future time-slots to predict (default 24 = next 24 hours).
-    method  : "moving_avg" | "linear_regression"
+    periods : int   — number of future hours to predict (default 24).
+    method  : str   — "moving_avg" (seasonal pattern, default) | "linear_regression"
 
     Returns
     -------
     {
-        "historical": [{"label": str, "value": int, "timestamp": str}, ...],
-        "forecast"  : [{"label": str, "value": int, "timestamp": str, "is_forecast": True}, ...],
+        "historical": [{"label", "value", "timestamp"}, ...],
+        "forecast"  : [{"label", "value", "upper", "lower", "timestamp", "is_forecast"}, ...],
         "method"    : str,
         "trend"     : "increasing" | "decreasing" | "stable",
         "summary"   : {...},
@@ -59,6 +61,7 @@ def get_traffic_forecast(
     )
 
     historical = []
+    raw_timestamps = []   # datetime objects for seasonal calc
     for item in qs:
         h = item["hour"]
         historical.append({
@@ -66,6 +69,7 @@ def get_traffic_forecast(
             "value":     item["count"],
             "timestamp": h.isoformat() if h else "",
         })
+        raw_timestamps.append(h)
 
     if not historical:
         return {
@@ -78,16 +82,7 @@ def get_traffic_forecast(
 
     values = [h["value"] for h in historical]
 
-    # Choose forecasting algorithm.
-    if method == "linear_regression":
-        forecast_values = _linear_regression_forecast(values, periods)
-    else:
-        forecast_values = _moving_average_forecast(values, periods)
-
-    trend = _determine_trend(values)
-
-    # Build forecast entries anchored to the last historical timestamp.
-    forecast: list[dict] = []
+    # Anchor the forecast to the last historical timestamp.
     last_ts_str = historical[-1]["timestamp"]
     try:
         last_dt = datetime.fromisoformat(last_ts_str)
@@ -96,11 +91,24 @@ def get_traffic_forecast(
     except (ValueError, TypeError):
         last_dt = datetime.now(tz=dt_timezone.utc)
 
-    for i, val in enumerate(forecast_values):
+    # Choose forecasting algorithm.
+    if method == "linear_regression":
+        fcast_vals, uppers, lowers = _linear_regression_forecast(values, periods)
+    else:
+        # "moving_avg" key kept for API compatibility; algorithm is now seasonal.
+        fcast_vals, uppers, lowers = _seasonal_forecast(values, raw_timestamps, periods, last_dt)
+
+    trend = _determine_trend(values)
+
+    # Build forecast point list.
+    forecast: list[dict] = []
+    for i, (val, upper, lower) in enumerate(zip(fcast_vals, uppers, lowers)):
         next_dt = last_dt + timedelta(hours=i + 1)
         forecast.append({
             "label":       next_dt.strftime("%b %d %H:%M"),
             "value":       max(0, round(val)),
+            "upper":       max(0, round(upper)),
+            "lower":       max(0, round(lower)),
             "timestamp":   next_dt.isoformat(),
             "is_forecast": True,
         })
@@ -125,36 +133,87 @@ def get_traffic_forecast(
 # Forecasting algorithms
 # ---------------------------------------------------------------------------
 
-def _moving_average_forecast(values: list[int], periods: int, window: int = 6) -> list[float]:
+def _seasonal_forecast(
+    values: list[int],
+    timestamps: list,
+    periods: int,
+    last_dt: datetime,
+) -> tuple[list[float], list[float], list[float]]:
     """
-    Extrapolate using a simple moving average of the last *window* data points.
-    A trend correction term (the per-period slope) is added so the forecast
-    rises or falls rather than projecting a flat line.
+    Seasonal pattern forecast.
+
+    1. Compute the average request count for each hour-of-day (0–23) from the
+       full historical series — this is the dataset's "typical day" profile.
+    2. For each forecast step, look up which hour-of-day it falls on and use
+       that hour's average as the base value.
+    3. Apply a trend adjustment: scale the base by how the overall traffic
+       level is changing (OLS slope relative to the mean).
+    4. Return ±20 % confidence bands around each forecast point.
     """
     if not values:
-        return [0.0] * periods
+        zeros = [0.0] * periods
+        return zeros, zeros, zeros
 
-    w = min(window, len(values))
-    recent = values[-w:]
-    base = sum(recent) / len(recent)
+    # Build hourly profile from historical data.
+    hourly_totals = [0.0] * 24
+    hourly_counts = [0]   * 24
+    for ts, val in zip(timestamps, values):
+        if ts is not None:
+            h = ts.hour if hasattr(ts, "hour") else 0
+            hourly_totals[h] += val
+            hourly_counts[h] += 1
+
+    overall_mean = sum(values) / len(values)
+    hourly_avg = [
+        hourly_totals[h] / hourly_counts[h] if hourly_counts[h] > 0 else overall_mean
+        for h in range(24)
+    ]
+
     slope = _trend_slope(values)
 
-    return [max(0.0, base + slope * (i + 1)) for i in range(periods)]
+    fcast_vals: list[float] = []
+    uppers:     list[float] = []
+    lowers:     list[float] = []
+
+    for i in range(periods):
+        next_dt = last_dt + timedelta(hours=i + 1)
+        hour    = next_dt.hour
+
+        base = hourly_avg[hour]
+
+        # Scale the seasonal base by the overall trend direction.
+        if overall_mean > 0:
+            trend_factor = 1.0 + (slope * (i + 1)) / overall_mean
+            trend_factor = max(0.05, trend_factor)   # floor to avoid negative scale
+        else:
+            trend_factor = 1.0
+
+        val    = max(0.0, base * trend_factor)
+        margin = val * 0.20
+
+        fcast_vals.append(val)
+        uppers.append(val + margin)
+        lowers.append(max(0.0, val - margin))
+
+    return fcast_vals, uppers, lowers
 
 
-def _linear_regression_forecast(values: list[int], periods: int) -> list[float]:
+def _linear_regression_forecast(
+    values: list[int],
+    periods: int,
+) -> tuple[list[float], list[float], list[float]]:
     """
-    Fit y = m·x + b to the full historical series using ordinary least squares,
-    then extrapolate *periods* steps beyond the last observed point.
+    OLS straight-line extrapolation with ±15 % confidence bands.
     """
     n = len(values)
     if n < 2:
         v = float(values[0]) if values else 0.0
-        return [v] * periods
+        fv = [v] * periods
+        return fv, [v * 1.15] * periods, [max(0.0, v * 0.85)] * periods
 
-    x_vals = list(range(n))
-    mean_x = sum(x_vals) / n
-    mean_y = sum(values) / n
+    x_vals  = list(range(n))
+    mean_x  = sum(x_vals) / n
+    mean_y  = sum(values) / n
 
     num = sum((x_vals[i] - mean_x) * (values[i] - mean_y) for i in range(n))
     den = sum((x_vals[i] - mean_x) ** 2 for i in range(n))
@@ -162,7 +221,11 @@ def _linear_regression_forecast(values: list[int], periods: int) -> list[float]:
     m = num / den if den else 0.0
     b = mean_y - m * mean_x
 
-    return [max(0.0, m * (n + i) + b) for i in range(periods)]
+    fcast_vals = [max(0.0, m * (n + i) + b) for i in range(periods)]
+    uppers     = [v * 1.15 for v in fcast_vals]
+    lowers     = [max(0.0, v * 0.85) for v in fcast_vals]
+
+    return fcast_vals, uppers, lowers
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +252,7 @@ def _determine_trend(values: list[int]) -> str:
     mean = sum(values) / len(values)
     if mean == 0:
         return "stable"
-    slope = _trend_slope(values)
+    slope    = _trend_slope(values)
     relative = slope / mean
     if relative > 0.02:
         return "increasing"

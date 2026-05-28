@@ -58,6 +58,12 @@ def get_log_entries(
     order_by: str = "-timestamp",
     date_from: str = "",
     date_to: str = "",
+    # Advanced search parameters
+    ip_address: str = "",
+    method: str = "",
+    endpoint: str = "",
+    status_min: int | None = None,
+    status_max: int | None = None,
 ) -> dict[str, Any]:
     """
     Return a paginated slice of log entries for a single dataset.
@@ -127,6 +133,24 @@ def get_log_entries(
         qs = qs.filter(
             Q(endpoint__icontains=search) | Q(ip_address__icontains=search)
         )
+
+    # -- Advanced search filters -----------------------------------------
+    ip_address = (ip_address or "").strip()
+    if ip_address:
+        qs = qs.filter(ip_address__icontains=ip_address)
+
+    method = (method or "").strip().upper()
+    if method:
+        qs = qs.filter(method=method)
+
+    endpoint = (endpoint or "").strip()
+    if endpoint:
+        qs = qs.filter(endpoint__icontains=endpoint)
+
+    if status_min is not None:
+        qs = qs.filter(status_code__gte=status_min)
+    if status_max is not None:
+        qs = qs.filter(status_code__lte=status_max)
 
     # -- Total count (before pagination) ---------------------------------
     total: int = qs.count()

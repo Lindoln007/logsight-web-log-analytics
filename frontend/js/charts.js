@@ -332,25 +332,33 @@
     const historical = data && Array.isArray(data.historical) ? data.historical : [];
     const forecast   = data && Array.isArray(data.forecast)   ? data.forecast   : [];
 
-    // Build a unified label array.
     const histLabels = historical.map(function (p) { return p.label || ""; });
     const fcstLabels = forecast.map(function (p) { return p.label || ""; });
     const allLabels  = histLabels.concat(fcstLabels);
 
-    // Historical dataset: real values then nulls (so it ends where history ends).
+    const nHist    = historical.length;
+    const nullHist = historical.map(function () { return null; });
+
+    // Historical line: real values, then nulls.
     const histValues = historical.map(function (p) { return p.value; })
       .concat(forecast.map(function () { return null; }));
 
-    // Forecast dataset: nulls up to the last historical point, then predictions.
-    const lastHistIdx = historical.length > 0 ? historical.length - 1 : 0;
-    const fcstPad = new Array(lastHistIdx).fill(null);
-    // Connect at the last historical point for a visual join.
-    const connectValue = historical.length > 0 ? historical[historical.length - 1].value : null;
-    const fcstValues = fcstPad.concat([connectValue]).concat(forecast.map(function (p) { return p.value; }));
+    // Forecast line: nulls up to last historical point, then connect + forecast values.
+    const connectValue = nHist > 0 ? historical[nHist - 1].value : null;
+    const fcstPad      = new Array(Math.max(0, nHist - 1)).fill(null);
+    const fcstValues   = fcstPad.concat([connectValue]).concat(forecast.map(function (p) { return p.value; }));
+
+    // Confidence band — upper bound.
+    const upperValues = nullHist.concat([connectValue]).concat(forecast.map(function (p) { return p.upper != null ? p.upper : p.value; }));
+    // Confidence band — lower bound (filled between lower and upper using Chart.js fill).
+    const lowerValues = nullHist.concat([connectValue]).concat(forecast.map(function (p) { return p.lower != null ? p.lower : p.value; }));
 
     const gradHist = ctx.createLinearGradient(0, 0, 0, el.height || 200);
     gradHist.addColorStop(0, c.primarySoft);
     gradHist.addColorStop(1, "transparent");
+
+    // Amber band fill colour (very translucent).
+    const bandFill = c.dark ? "rgba(251,191,36,0.12)" : "rgba(251,191,36,0.10)";
 
     charts.forecast = new Chart(ctx, {
       type: "line",
@@ -368,6 +376,33 @@
             pointRadius: 0,
             pointHoverRadius: 4,
             spanGaps: false,
+            order: 1,
+          },
+          {
+            label: "Upper bound",
+            data: upperValues,
+            borderColor: "transparent",
+            backgroundColor: bandFill,
+            fill: "+1",          // fill down to the lower-bound dataset
+            tension: 0.35,
+            borderWidth: 0,
+            pointRadius: 0,
+            pointHoverRadius: 0,
+            spanGaps: false,
+            order: 3,
+          },
+          {
+            label: "Lower bound",
+            data: lowerValues,
+            borderColor: "transparent",
+            backgroundColor: "transparent",
+            fill: false,
+            tension: 0.35,
+            borderWidth: 0,
+            pointRadius: 0,
+            pointHoverRadius: 0,
+            spanGaps: false,
+            order: 4,
           },
           {
             label: "Forecast",
@@ -381,6 +416,7 @@
             pointRadius: 0,
             pointHoverRadius: 4,
             spanGaps: false,
+            order: 2,
           },
         ],
       },
@@ -390,7 +426,15 @@
         plugins: {
           ...defaultChartOptions().plugins,
           legend: {
-            labels: { color: c.text, font: { family: "'Inter', system-ui, sans-serif", size: 11 }, usePointStyle: true },
+            labels: {
+              color: c.text,
+              font: { family: "'Inter', system-ui, sans-serif", size: 11 },
+              usePointStyle: true,
+              filter: function (item) {
+                // Hide the band helper datasets from the legend.
+                return item.text !== "Upper bound" && item.text !== "Lower bound";
+              },
+            },
           },
           tooltip: {
             backgroundColor: c.dark ? "#1e293b" : "#fff",
@@ -400,7 +444,12 @@
             borderWidth: 1,
             padding: 12,
             cornerRadius: 8,
-            filter: function (item) { return item.raw !== null; },
+            filter: function (item) {
+              // Only show Historical and Forecast in tooltip.
+              return item.raw !== null &&
+                item.dataset.label !== "Upper bound" &&
+                item.dataset.label !== "Lower bound";
+            },
           },
           logSightEmptyState: { enabled: false },
         },
@@ -520,6 +569,60 @@
     });
   }
 
+  // ---------------------------------------------------------------------------
+  // Dataset comparison chart — two overlaid hourly traffic lines
+  // ---------------------------------------------------------------------------
+
+  function renderComparisonChart(canvasId, labels, valA, valB, nameA, nameB) {
+    destroyChart("compare");
+    const el = document.getElementById(canvasId);
+    if (!el) return;
+    const c   = getThemeColors();
+    const ctx = el.getContext("2d");
+
+    charts["compare"] = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: nameA || "Dataset A",
+            data: valA,
+            borderColor: c.primary,
+            backgroundColor: "transparent",
+            tension: 0.35,
+            borderWidth: 2,
+            pointRadius: 0,
+            pointHoverRadius: 4,
+          },
+          {
+            label: nameB || "Dataset B",
+            data: valB,
+            borderColor: c.warn,
+            backgroundColor: "transparent",
+            tension: 0.35,
+            borderWidth: 2,
+            borderDash: [5, 3],
+            pointRadius: 0,
+            pointHoverRadius: 4,
+          },
+        ],
+      },
+      options: {
+        ...defaultChartOptions(),
+        interaction: { intersect: false, mode: "index" },
+        plugins: {
+          ...defaultChartOptions().plugins,
+          legend: { labels: { color: c.text, font: { family: "'Inter', system-ui, sans-serif", size: 11 }, usePointStyle: true } },
+        },
+        scales: {
+          x: { grid: { color: c.grid }, ticks: { color: c.textMuted, maxTicksLimit: 12 } },
+          y: { beginAtZero: true, grid: { color: c.grid }, ticks: { color: c.textMuted } },
+        },
+      },
+    });
+  }
+
   global.LogSightCharts = {
     destroyAll: destroyAll,
     renderRequestFrequency: renderRequestFrequency,
@@ -528,6 +631,7 @@
     renderTrafficArea: renderTrafficArea,
     renderForecastChart: renderForecastChart,
     renderAnomalyChart: renderAnomalyChart,
+    renderComparisonChart: renderComparisonChart,
     getThemeColors: getThemeColors,
   };
 })(typeof window !== "undefined" ? window : globalThis);

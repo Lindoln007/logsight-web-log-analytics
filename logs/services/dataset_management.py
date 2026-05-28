@@ -123,6 +123,23 @@ def _process_dataset_in_background(*, dataset_id: int, batch_size: int) -> None:
                 dataset_id,
             )
 
+        # Notify the owner that their dataset is ready.
+        try:
+            dataset_obj = Dataset.objects.get(pk=dataset_id)
+            from logs.services.notifications import create_notification
+            create_notification(
+                dataset_obj.owner,
+                f"Dataset '{dataset_obj.name}' finished processing — "
+                f"{dataset_obj.total_entries:,} entries ready.",
+                notification_type="dataset_ready",
+                dataset=dataset_obj,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to create dataset_ready notification for dataset_id=%s",
+                dataset_id,
+            )
+
     except Exception:
         logger.exception("Background processing failed for dataset_id=%s", dataset_id)
         # Guard: transition to FAILED if parse_dataset_log() did not already

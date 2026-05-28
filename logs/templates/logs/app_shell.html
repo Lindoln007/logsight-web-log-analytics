@@ -65,13 +65,17 @@
               <div class="nav-dropdown">
                 <a href="#/forecast" data-route="forecast">Forecasting<span>Predict traffic and load</span></a>
                 <a href="#/anomalies" data-route="anomalies">Anomalies<span>Detect unusual behavior</span></a>
+                <a href="#/compare" data-route="compare">Compare Datasets<span>Side-by-side dataset analysis</span></a>
+                <a href="#/search" data-route="search">Advanced Search<span>Filter and query log entries</span></a>
                 <a href="#/reports" data-route="reports">Reports<span>Export operational summaries</span></a>
               </div>
             </div>
             <div class="top-nav-group" data-nav-item data-nav-section="monitoring">
               <button type="button" class="top-nav-link" aria-haspopup="true">Monitoring</button>
-              <div class="nav-dropdown nav-dropdown--compact">
-                <a href="#/alerts" data-route="alerts">Alerts<span>Rules, checks, and history</span></a>
+              <div class="nav-dropdown">
+                <a href="#/alerts" data-route="alerts">Alerts<span>Health checks and thresholds</span></a>
+                <a href="#/security" data-route="security">Security Insights<span>Threats and anomalous IPs</span></a>
+                <a href="#/simulate" data-route="simulate">Live Ingestion<span>Simulate real-time log data</span></a>
               </div>
             </div>
           </nav>
@@ -81,6 +85,21 @@
               <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35m1.1-5.15a6.25 6.25 0 11-12.5 0 6.25 6.25 0 0112.5 0z" /></svg>
               <input type="search" placeholder="Search logs, datasets..." />
             </label>
+            <!-- Notification bell -->
+            <button type="button" id="notif-bell" class="notif-bell" aria-label="Notifications">
+              <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>
+              <span id="notif-badge" class="notif-badge hidden">0</span>
+            </button>
+            <!-- Notification dropdown -->
+            <div id="notif-dropdown" class="notif-dropdown hidden">
+              <div class="notif-dropdown-header">
+                <span class="text-sm font-semibold text-slate-800 dark:text-slate-200">Notifications</span>
+                <button type="button" id="notif-mark-all" class="text-xs text-indigo-600 hover:underline dark:text-indigo-400">Mark all read</button>
+              </div>
+              <div id="notif-list" class="notif-list">
+                <p class="px-4 py-6 text-center text-xs text-slate-400">No notifications yet.</p>
+              </div>
+            </div>
             <a href="{% url 'accounts:profile' %}" class="profile-chip">{{ request.user.username }}</a>
             <form method="post" action="{% url 'accounts:logout' %}" class="inline-flex">
               {% csrf_token %}
@@ -101,9 +120,13 @@
           <p>Analytics</p>
           <a href="#/forecast" data-route="forecast">Forecasting</a>
           <a href="#/anomalies" data-route="anomalies">Anomalies</a>
+          <a href="#/compare" data-route="compare">Compare Datasets</a>
+          <a href="#/search" data-route="search">Advanced Search</a>
           <a href="#/reports" data-route="reports">Reports</a>
           <p>Monitoring</p>
           <a href="#/alerts" data-route="alerts">Alerts</a>
+          <a href="#/security" data-route="security">Security Insights</a>
+          <a href="#/simulate" data-route="simulate">Live Ingestion</a>
         </div>
       </header>
 
@@ -123,7 +146,7 @@
           <section data-view="dashboard" class="space-y-6">
             <!-- Dataset selector + controls -->
             <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div class="flex min-w-0 flex-1 items-center gap-3">
+              <div class="flex min-w-0 flex-1 flex-wrap items-center gap-3">
                 <label for="dashboard-dataset" class="shrink-0 text-sm font-medium text-slate-700 dark:text-slate-300">Dataset</label>
                 <select
                   id="dashboard-dataset"
@@ -131,6 +154,18 @@
                 >
                   <option value="">Loading datasets…</option>
                 </select>
+                <!-- Date range filter -->
+                <div id="dashboard-date-filter" class="hidden items-center gap-2">
+                  <span class="text-xs text-slate-400">From</span>
+                  <input id="dash-date-from" type="date" class="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
+                  <span class="text-xs text-slate-400">To</span>
+                  <input id="dash-date-to" type="date" class="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
+                  <button type="button" id="dash-date-clear" class="rounded-lg px-2 py-1.5 text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400">✕ Clear</button>
+                </div>
+                <button type="button" id="dash-date-toggle" class="hidden rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                  <svg class="inline h-3.5 w-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                  Filter by date
+                </button>
               </div>
               <div class="flex items-center gap-2">
                 <button
@@ -377,7 +412,7 @@
                 <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
                   Method
                   <select id="forecast-method" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
-                    <option value="moving_avg">Moving Average</option>
+                    <option value="moving_avg">Seasonal Pattern</option>
                     <option value="linear_regression">Linear Regression</option>
                   </select>
                 </label>
@@ -433,7 +468,7 @@
             <div class="rounded-2xl border border-slate-200/80 bg-slate-50 p-5 dark:border-slate-800 dark:bg-slate-900/40">
               <h3 class="mb-2 text-sm font-semibold text-slate-700 dark:text-slate-300">How it works</h3>
               <p id="forecast-method-desc" class="text-sm leading-relaxed text-slate-600 dark:text-slate-400">
-                <strong>Moving Average:</strong> The forecast is based on the average of the last 6 historical hourly buckets, adjusted by the dataset's per-hour trend slope. Simple, robust, and easy to interpret.
+                <strong>Seasonal Pattern:</strong> Averages traffic per hour-of-day across the full dataset history, then projects those daily rhythms forward with a trend adjustment. Produces realistic peaks and troughs rather than a flat line.
               </p>
             </div>
           </section>
@@ -454,9 +489,9 @@
                 <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
                   Sensitivity
                   <select id="anomaly-sensitivity" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
-                    <option value="low">Low (k=3σ)</option>
-                    <option value="medium" selected>Medium (k=2σ)</option>
-                    <option value="high">High (k=1.5σ)</option>
+                    <option value="low">Low — only major spikes</option>
+                    <option value="medium" selected>Medium — balanced</option>
+                    <option value="high">High — catch subtle shifts</option>
                   </select>
                 </label>
               </div>
@@ -466,6 +501,11 @@
               </button>
             </div>
 
+            <!-- Summary banner -->
+            <div id="anomaly-summary-banner" class="hidden rounded-2xl border px-5 py-4">
+              <p id="anomaly-summary-text" class="text-sm font-medium"></p>
+            </div>
+
             <!-- Summary cards -->
             <div id="anomaly-summary-cards" class="hidden grid gap-4 sm:grid-cols-4">
               <div class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
@@ -473,15 +513,15 @@
                 <p id="anomaly-stat-total" class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">0</p>
               </div>
               <div class="card-lift rounded-2xl border border-red-100 bg-white p-5 shadow-card dark:border-red-900/30 dark:bg-slate-900/60">
-                <p class="text-sm font-medium text-red-500">High severity</p>
+                <p class="text-sm font-medium text-red-500">Critical</p>
                 <p id="anomaly-stat-high" class="mt-2 text-2xl font-bold text-red-600 dark:text-red-400">0</p>
               </div>
               <div class="card-lift rounded-2xl border border-amber-100 bg-white p-5 shadow-card dark:border-amber-900/30 dark:bg-slate-900/60">
-                <p class="text-sm font-medium text-amber-500">Medium severity</p>
+                <p class="text-sm font-medium text-amber-500">Notable</p>
                 <p id="anomaly-stat-medium" class="mt-2 text-2xl font-bold text-amber-600 dark:text-amber-400">0</p>
               </div>
               <div class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-                <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Low severity</p>
+                <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Minor</p>
                 <p id="anomaly-stat-low" class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">0</p>
               </div>
             </div>
@@ -489,7 +529,7 @@
             <!-- Chart -->
             <div class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
               <h2 class="mb-1 text-base font-semibold text-slate-900 dark:text-white">Request Volume with Anomalies</h2>
-              <p class="mb-4 text-sm text-slate-500 dark:text-slate-400">Red markers indicate detected anomalous hours. Hover for details.</p>
+              <p class="mb-4 text-sm text-slate-500 dark:text-slate-400">Red markers show detected anomalous hours. Hover a marker for details.</p>
               <div id="anomaly-empty" class="flex h-72 items-center justify-center text-slate-400 dark:text-slate-600">
                 <div class="text-center">
                   <svg class="mx-auto mb-3 h-12 w-12 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
@@ -499,10 +539,10 @@
               <div id="anomaly-chart-wrap" class="hidden h-72 w-full"><canvas id="chart-anomalies"></canvas></div>
             </div>
 
-            <!-- Anomaly table -->
+            <!-- Anomaly list -->
             <div id="anomaly-list-wrap" class="hidden rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900/60">
               <div class="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
-                <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Detected Anomalies</h3>
+                <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Findings</h3>
               </div>
               <div class="divide-y divide-slate-100 dark:divide-slate-800" id="anomaly-list"></div>
             </div>
@@ -512,7 +552,9 @@
           <!-- Alerts                                                        -->
           <!-- ============================================================ -->
           <section data-view="alerts" class="hidden space-y-6">
-            <!-- Dataset selector + Check Now -->
+            <p class="text-sm text-slate-600 dark:text-slate-400">Select a dataset and run a health check. LogSight automatically checks for high error rates and unusual traffic spikes — no configuration needed.</p>
+
+            <!-- Dataset selector + Run Check -->
             <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
                 Dataset
@@ -520,56 +562,27 @@
                   <option value="">Select…</option>
                 </select>
               </label>
-              <button type="button" id="alerts-check" class="inline-flex items-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-700 transition hover:bg-amber-100 dark:border-amber-700/50 dark:bg-amber-950/30 dark:text-amber-300 dark:hover:bg-amber-950/50">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>
-                Check Now
+              <button type="button" id="alerts-check" class="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:bg-indigo-500">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                Run Health Check
               </button>
             </div>
 
-            <!-- Check result banner -->
-            <div id="alerts-check-result" class="hidden rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300"></div>
-
-            <!-- Create rule form -->
-            <div class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-              <h2 class="mb-4 text-base font-semibold text-slate-900 dark:text-white">Create Alert Rule</h2>
-              <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <label class="block">
-                  <span class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Rule name</span>
-                  <input id="alert-name" type="text" placeholder="e.g. High Error Rate" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
-                </label>
-                <label class="block">
-                  <span class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Error rate threshold (%)</span>
-                  <input id="alert-error-rate" type="number" min="0" max="100" step="0.1" placeholder="e.g. 5" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
-                </label>
-                <label class="block">
-                  <span class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Spike multiplier (×mean)</span>
-                  <input id="alert-spike" type="number" min="1" max="20" step="0.5" placeholder="e.g. 3" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
-                </label>
-                <div class="flex items-end">
-                  <button type="button" id="alert-create" class="w-full rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-500">Add Rule</button>
-                </div>
-              </div>
-              <p id="alert-create-msg" class="mt-2 hidden text-xs text-emerald-600 dark:text-emerald-400">Rule created successfully.</p>
+            <!-- Overall status banner -->
+            <div id="alerts-status-banner" class="hidden rounded-2xl border px-5 py-4">
+              <p id="alerts-status-text" class="text-sm font-semibold"></p>
             </div>
 
-            <!-- Rules list -->
-            <div class="card-lift rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-              <div class="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
-                <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Active Rules</h3>
-              </div>
-              <div id="alert-rules-list" class="divide-y divide-slate-100 dark:divide-slate-800">
-                <p class="px-5 py-6 text-center text-sm text-slate-500 dark:text-slate-400">Select a dataset to view alert rules.</p>
-              </div>
-            </div>
+            <!-- Check result cards -->
+            <div id="alerts-results" class="hidden grid gap-4 sm:grid-cols-2"></div>
 
-            <!-- Alert history -->
-            <div class="card-lift rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-              <div class="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
-                <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Alert History</h3>
-              </div>
-              <div id="alert-history-list" class="divide-y divide-slate-100 dark:divide-slate-800">
-                <p class="px-5 py-6 text-center text-sm text-slate-500 dark:text-slate-400">No alert history yet.</p>
-              </div>
+            <!-- Thresholds info -->
+            <div class="rounded-2xl border border-slate-200/80 bg-slate-50 p-5 dark:border-slate-800 dark:bg-slate-900/40">
+              <h3 class="mb-2 text-sm font-semibold text-slate-700 dark:text-slate-300">How checks work</h3>
+              <ul class="space-y-1.5 text-sm text-slate-600 dark:text-slate-400">
+                <li><span class="font-medium text-slate-700 dark:text-slate-300">Error Rate</span> — Warning above 10 %, Critical above 25 %.</li>
+                <li><span class="font-medium text-slate-700 dark:text-slate-300">Traffic Spike</span> — Warning when the last recorded hour is 2× the dataset average; Critical at 3×.</li>
+              </ul>
             </div>
           </section>
 
@@ -628,6 +641,213 @@
                     <p class="mt-0.5">Machine-readable structured format. Useful for integration, archiving, or further programmatic analysis.</p>
                   </div>
                 </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- ============================================================ -->
+          <!-- Security Insights                                            -->
+          <!-- ============================================================ -->
+          <section data-view="security" class="hidden space-y-6">
+            <p class="text-sm text-slate-600 dark:text-slate-400">Analyses your log data for suspicious patterns — no predefined rules, every finding is derived directly from the data.</p>
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
+                Dataset
+                <select id="security-dataset" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
+                  <option value="">Select…</option>
+                </select>
+              </label>
+              <button type="button" id="security-run" class="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:bg-indigo-500">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /></svg>
+                Run Analysis
+              </button>
+            </div>
+            <!-- Risk score banner -->
+            <div id="security-banner" class="hidden rounded-2xl border px-5 py-4">
+              <div class="flex items-center justify-between">
+                <p id="security-summary" class="text-sm font-medium text-slate-700 dark:text-slate-300"></p>
+                <span id="security-score-badge" class="rounded-full px-3 py-1 text-sm font-bold"></span>
+              </div>
+            </div>
+            <!-- Findings list -->
+            <div id="security-findings" class="space-y-4"></div>
+            <!-- Empty state -->
+            <div id="security-empty" class="flex h-56 items-center justify-center text-slate-400 dark:text-slate-600">
+              <div class="text-center">
+                <svg class="mx-auto mb-3 h-12 w-12 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /></svg>
+                <p class="text-sm">Select a dataset and click Run Analysis</p>
+              </div>
+            </div>
+          </section>
+
+          <!-- ============================================================ -->
+          <!-- Dataset Comparison                                            -->
+          <!-- ============================================================ -->
+          <section data-view="compare" class="hidden space-y-6">
+            <p class="text-sm text-slate-600 dark:text-slate-400">Select two datasets to compare their metrics, traffic patterns, and top endpoints side by side.</p>
+            <div class="flex flex-wrap items-center gap-4">
+              <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
+                Dataset A
+                <select id="compare-dataset-a" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
+                  <option value="">Select…</option>
+                </select>
+              </label>
+              <span class="text-sm font-medium text-slate-400">vs.</span>
+              <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
+                Dataset B
+                <select id="compare-dataset-b" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
+                  <option value="">Select…</option>
+                </select>
+              </label>
+              <button type="button" id="compare-run" class="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:bg-indigo-500">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
+                Compare
+              </button>
+            </div>
+            <!-- Metrics comparison table -->
+            <div id="compare-results" class="hidden space-y-6">
+              <div class="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900/60">
+                <div class="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+                  <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Metrics Comparison</h3>
+                </div>
+                <div id="compare-metrics-table" class="overflow-x-auto"></div>
+              </div>
+              <div class="grid gap-6 lg:grid-cols-2">
+                <div class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
+                  <h3 class="mb-4 text-sm font-semibold text-slate-800 dark:text-slate-200">Traffic Patterns</h3>
+                  <div class="h-64"><canvas id="chart-compare-traffic"></canvas></div>
+                </div>
+                <div class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
+                  <h3 class="mb-4 text-sm font-semibold text-slate-800 dark:text-slate-200">Top Endpoints — Dataset A</h3>
+                  <div id="compare-endpoints-a" class="space-y-1.5 text-sm text-slate-600 dark:text-slate-400"></div>
+                </div>
+              </div>
+            </div>
+            <div id="compare-empty" class="flex h-48 items-center justify-center text-slate-400 dark:text-slate-600">
+              <div class="text-center">
+                <svg class="mx-auto mb-3 h-12 w-12 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
+                <p class="text-sm">Select two datasets and click Compare</p>
+              </div>
+            </div>
+          </section>
+
+          <!-- ============================================================ -->
+          <!-- Advanced Search                                               -->
+          <!-- ============================================================ -->
+          <section data-view="search" class="hidden space-y-6">
+            <p class="text-sm text-slate-600 dark:text-slate-400">Build multi-field queries across your log data. Add filters, combine them with AND logic, and export results.</p>
+            <!-- Controls -->
+            <div class="flex flex-wrap items-center gap-3">
+              <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
+                Dataset
+                <select id="search-dataset" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
+                  <option value="">Select…</option>
+                </select>
+              </label>
+            </div>
+            <!-- Filter builder -->
+            <div class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
+              <div class="mb-3 flex items-center justify-between">
+                <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Filters</h3>
+                <button type="button" id="search-add-filter" class="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
+                  <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
+                  Add filter
+                </button>
+              </div>
+              <div id="search-filter-rows" class="space-y-2"></div>
+              <div class="mt-4 flex items-center gap-3">
+                <button type="button" id="search-run" class="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:bg-indigo-500">
+                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                  Search
+                </button>
+                <button type="button" id="search-save" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">Save Search</button>
+                <span id="search-meta" class="text-xs text-slate-400"></span>
+              </div>
+            </div>
+            <!-- Saved searches -->
+            <div id="search-saved-wrap" class="hidden rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900/60">
+              <div class="border-b border-slate-200 px-5 py-3 dark:border-slate-800">
+                <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Saved Searches</h3>
+              </div>
+              <div id="search-saved-list" class="divide-y divide-slate-100 dark:divide-slate-800"></div>
+            </div>
+            <!-- Results table -->
+            <div id="search-results-wrap" class="hidden overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900/60">
+              <div class="border-b border-slate-200 px-5 py-3 dark:border-slate-800 flex items-center justify-between">
+                <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Results</h3>
+                <span id="search-result-count" class="text-xs text-slate-400"></span>
+              </div>
+              <div class="log-scroll overflow-x-auto">
+                <table class="min-w-full text-left text-sm">
+                  <thead class="border-b border-slate-200 bg-slate-50/80 dark:border-slate-800 dark:bg-slate-800/30">
+                    <tr>
+                      <th class="whitespace-nowrap px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">Time</th>
+                      <th class="whitespace-nowrap px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">Status</th>
+                      <th class="whitespace-nowrap px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">Method</th>
+                      <th class="whitespace-nowrap px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">IP</th>
+                      <th class="px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">Endpoint</th>
+                    </tr>
+                  </thead>
+                  <tbody id="search-results-body" class="divide-y divide-slate-100 dark:divide-slate-800"></tbody>
+                </table>
+              </div>
+              <div class="flex items-center justify-between border-t border-slate-100 px-5 py-3 dark:border-slate-800">
+                <button type="button" id="search-prev" class="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-40 dark:border-slate-700 dark:text-slate-300" disabled>← Prev</button>
+                <span id="search-page-info" class="text-xs text-slate-400"></span>
+                <button type="button" id="search-next" class="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-40 dark:border-slate-700 dark:text-slate-300" disabled>Next →</button>
+              </div>
+            </div>
+          </section>
+
+          <!-- ============================================================ -->
+          <!-- Live Ingestion Simulator                                      -->
+          <!-- ============================================================ -->
+          <section data-view="simulate" class="hidden space-y-6">
+            <p class="text-sm text-slate-600 dark:text-slate-400">Simulate real-time log ingestion by generating synthetic Apache/Nginx entries on demand. Useful for testing the analytics pipeline without a live server.</p>
+            <div class="flex flex-wrap items-center gap-4">
+              <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
+                Target dataset
+                <select id="simulate-dataset" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
+                  <option value="">Select…</option>
+                </select>
+              </label>
+              <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
+                Entries per batch
+                <input id="simulate-count" type="number" min="1" max="50" value="10" class="w-20 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
+              </label>
+              <div class="flex items-center gap-2">
+                <button type="button" id="simulate-once" class="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:bg-indigo-500">
+                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                  Generate Once
+                </button>
+                <button type="button" id="simulate-auto" class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                  Auto (every 3s)
+                </button>
+              </div>
+            </div>
+            <!-- Stats bar -->
+            <div id="simulate-stats" class="hidden grid grid-cols-3 gap-4">
+              <div class="card-lift rounded-2xl border border-slate-200/80 bg-white p-4 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
+                <p class="text-xs text-slate-500 dark:text-slate-400">Total generated</p>
+                <p id="simulate-total" class="mt-1 text-xl font-bold text-slate-900 dark:text-white">0</p>
+              </div>
+              <div class="card-lift rounded-2xl border border-slate-200/80 bg-white p-4 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
+                <p class="text-xs text-slate-500 dark:text-slate-400">Last batch</p>
+                <p id="simulate-last" class="mt-1 text-xl font-bold text-slate-900 dark:text-white">—</p>
+              </div>
+              <div class="card-lift rounded-2xl border border-slate-200/80 bg-white p-4 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
+                <p class="text-xs text-slate-500 dark:text-slate-400">Status</p>
+                <p id="simulate-status" class="mt-1 text-sm font-semibold text-slate-900 dark:text-white">Idle</p>
+              </div>
+            </div>
+            <!-- Live feed -->
+            <div class="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900/60">
+              <div class="border-b border-slate-200 px-5 py-3 dark:border-slate-800">
+                <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Live Feed</h3>
+              </div>
+              <div id="simulate-feed" class="log-scroll h-72 overflow-y-auto p-4 font-mono text-xs text-slate-600 dark:text-slate-400">
+                <p class="text-slate-400">Waiting for log entries…</p>
               </div>
             </div>
           </section>

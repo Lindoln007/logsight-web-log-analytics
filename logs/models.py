@@ -365,3 +365,87 @@ class DashboardPreference(models.Model):
 
     def __str__(self):
         return f"Preferences for {self.user.username}"
+
+
+class Notification(models.Model):
+    """
+    In-app notification for a user, typically created when an alert fires
+    or a dataset finishes processing.
+    """
+
+    SEVERITY_INFO = "info"
+    SEVERITY_WARNING = "warning"
+    SEVERITY_CRITICAL = "critical"
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="notifications",
+    )
+    message = models.TextField()
+    severity = models.CharField(max_length=20, default=SEVERITY_INFO)
+    notification_type = models.CharField(max_length=50, default="general")
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+    dataset = models.ForeignKey(
+        Dataset,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="notifications",
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"[{self.severity}] {self.notification_type} — {self.user.username}"
+
+
+class UserProfile(models.Model):
+    """
+    Extended profile for the built-in User model, storing the user's RBAC role.
+    One profile per user, created automatically via a post_save signal.
+    """
+
+    ROLE_ADMIN = "admin"
+    ROLE_ANALYST = "analyst"
+    ROLE_VIEWER = "viewer"
+    ROLE_PENDING = "pending"
+
+    ROLE_CHOICES = [
+        (ROLE_ADMIN,   "Admin"),
+        (ROLE_ANALYST, "Analyst"),
+        (ROLE_VIEWER,  "Viewer"),
+        (ROLE_PENDING, "Pending"),
+    ]
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="profile",
+    )
+    role = models.CharField(
+        max_length=20,
+        choices=ROLE_CHOICES,
+        default=ROLE_PENDING,
+    )
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def __str__(self):
+        return f"{self.user.username} ({self.role})"
+
+    @property
+    def is_admin(self) -> bool:
+        return self.role == self.ROLE_ADMIN
+
+    @property
+    def is_analyst(self) -> bool:
+        return self.role in (self.ROLE_ADMIN, self.ROLE_ANALYST)
+
+    @property
+    def is_viewer(self) -> bool:
+        return self.role != self.ROLE_PENDING

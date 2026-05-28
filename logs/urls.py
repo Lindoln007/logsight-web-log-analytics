@@ -110,6 +110,11 @@ urlpatterns = [
         name="alerts-history",
     ),
     path(
+        "datasets/<int:dataset_id>/alerts/auto/",
+        views.auto_alerts_view,
+        name="alerts-auto",
+    ),
+    path(
         "datasets/<int:dataset_id>/alerts/<int:rule_id>/",
         views.alert_rule_detail_view,
         name="alert-rule-detail",
@@ -131,5 +136,79 @@ urlpatterns = [
         "preferences/",
         views.dashboard_preferences_view,
         name="preferences",
+    ),
+
+    # ------------------------------------------------------------------
+    # Security insights  (Module 1)
+    # ------------------------------------------------------------------
+    path(
+        "datasets/<int:dataset_id>/security/",
+        views.security_insights_view,
+        name="security-insights",
+    ),
+
+    # ------------------------------------------------------------------
+    # Dataset comparison  (Module 2)
+    # ------------------------------------------------------------------
+    path(
+        "compare/",
+        views.comparison_view,
+        name="compare",
+    ),
+
+    # ------------------------------------------------------------------
+    # Analytics filtered summary  (Module 3)
+    # ------------------------------------------------------------------
+    path(
+        "datasets/<int:dataset_id>/analytics/filtered-summary/",
+        views.analytics_filtered_summary_view,
+        name="analytics-filtered-summary",
+    ),
+
+    # ------------------------------------------------------------------
+    # Notifications  (Module 4)
+    # ------------------------------------------------------------------
+    path(
+        "notifications/",
+        views.notifications_list_view,
+        name="notifications-list",
+    ),
+    path(
+        "notifications/count/",
+        views.notifications_count_view,
+        name="notifications-count",
+    ),
+    path(
+        "notifications/read-all/",
+        views.notifications_mark_all_read_view,
+        name="notifications-read-all",
+    ),
+    path(
+        "notifications/<int:notification_id>/read/",
+        views.notifications_mark_read_view,
+        name="notifications-mark-read",
+    ),
+
+    # ------------------------------------------------------------------
+    # Log simulator  (Module 6)
+    # ------------------------------------------------------------------
+    path(
+        "datasets/<int:dataset_id>/simulate/",
+        views.simulate_logs_view,
+        name="simulate-logs",
+    ),
+
+    # ------------------------------------------------------------------
+    # RBAC admin  (Module 7)
+    # ------------------------------------------------------------------
+    path(
+        "admin/users/",
+        views.user_management_view,
+        name="admin-users",
+    ),
+    path(
+        "admin/users/<int:user_id>/role/",
+        views.assign_role_view,
+        name="admin-assign-role",
     ),
 ]

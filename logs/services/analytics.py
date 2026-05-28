@@ -548,6 +548,74 @@ def get_analytics_overview(
 
 
 # ---------------------------------------------------------------------------
+# Date-range filtered summary  (queries LogEntry directly, no cache)
+# ---------------------------------------------------------------------------
+
+
+def get_filtered_summary(
+    dataset_id: int,
+    owner: User,
+    date_from=None,
+    date_to=None,
+) -> dict[str, Any]:
+    """
+    Return aggregate metrics for a dataset filtered by an optional date range.
+
+    Unlike ``get_summary_metrics``, this function queries ``LogEntry`` directly
+    and is never cached — it is intended for ad-hoc date-range exploration on
+    the dashboard.
+
+    Args:
+        date_from: Optional datetime (aware or naive) — inclusive lower bound.
+        date_to:   Optional datetime (aware or naive) — inclusive upper bound.
+
+    Return shape::
+
+        {
+            "dataset_id": int,
+            "total_requests": int,
+            "total_errors": int,
+            "error_rate": float,
+            "avg_response_size": float | None,
+            "unique_visitors": int,
+            "date_range": {"start": "ISO8601" | None, "end": "ISO8601" | None},
+        }
+    """
+    qs = LogEntry.objects.filter(dataset_id=dataset_id, dataset__owner=owner)
+
+    if date_from is not None:
+        qs = qs.filter(timestamp__gte=date_from)
+    if date_to is not None:
+        qs = qs.filter(timestamp__lte=date_to)
+
+    agg = qs.aggregate(
+        total_requests=Count("id"),
+        total_errors=Count("id", filter=Q(error_flag=True)),
+        unique_visitors=Count("ip_address", distinct=True),
+        avg_response_size=Avg("response_size"),
+    )
+
+    total: int = agg["total_requests"] or 0
+    total_errors: int = agg["total_errors"] or 0
+    error_rate: float = round(total_errors / total * 100, 3) if total > 0 else 0.0
+
+    return {
+        "dataset_id": dataset_id,
+        "total_requests": total,
+        "total_errors": total_errors,
+        "error_rate": error_rate,
+        "avg_response_size": (
+            float(agg["avg_response_size"]) if agg["avg_response_size"] is not None else None
+        ),
+        "unique_visitors": agg["unique_visitors"] or 0,
+        "date_range": {
+            "start": date_from.isoformat() if date_from else None,
+            "end": date_to.isoformat() if date_to else None,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
 # Persistence — AnalyticsSummary pre-computation
 # ---------------------------------------------------------------------------
 

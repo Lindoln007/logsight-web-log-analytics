@@ -7,7 +7,8 @@
 
   var PREFS_KEY    = "log-sight-prefs";           // localStorage fallback for preferences
   var routes       = ["dashboard", "upload", "datasets", "viewer",
-                      "forecast", "anomalies", "alerts", "reports"];
+                      "forecast", "anomalies", "alerts", "reports",
+                      "security", "compare", "search", "simulate"];
 
   var viewerPage             = 1;
   var viewerSearchDebounce;
@@ -192,8 +193,8 @@
     });
     var section = "";
     if (["upload", "datasets", "viewer"].indexOf(route) >= 0) section = "data";
-    if (["forecast", "anomalies", "reports"].indexOf(route) >= 0) section = "analytics";
-    if (route === "alerts") section = "monitoring";
+    if (["forecast", "anomalies", "reports", "compare", "search"].indexOf(route) >= 0) section = "analytics";
+    if (["alerts", "security", "simulate"].indexOf(route) >= 0) section = "monitoring";
     $all("[data-nav-section]").forEach(function (group) {
       var active = group.getAttribute("data-nav-section") === section;
       var trigger = $(".top-nav-link", group);
@@ -223,11 +224,15 @@
       anomalies: "Anomaly Detection",
       alerts:    "Alerts",
       reports:   "Reports",
+      security:  "Security Insights",
+      compare:   "Dataset Comparison",
+      search:    "Advanced Search",
+      simulate:  "Live Ingestion",
     };
     var titleEl = $("#page-title");
     if (titleEl) titleEl.textContent = titles[route] || "Dashboard";
     var period = $("#stat-period");
-    if (period) period.classList.toggle("hidden", ["viewer", "forecast", "anomalies", "reports"].indexOf(route) < 0);
+    if (period) period.classList.toggle("hidden", ["viewer", "forecast", "anomalies", "reports", "compare", "security"].indexOf(route) < 0);
     updateNavActive(route);
   }
 
@@ -240,6 +245,10 @@
     if (route === "anomalies")  initAnomalyView();
     if (route === "alerts")     initAlertsView();
     if (route === "reports")    initReportsView();
+    if (route === "security")   initSecurityView();
+    if (route === "compare")    initCompareView();
+    if (route === "search")     initSearchView();
+    if (route === "simulate")   initSimulateView();
   }
 
   function navigate(route) { setHashRoute(route); }
@@ -860,9 +869,9 @@
           var desc = $("#forecast-method-desc");
           if (!desc) return;
           if (methodSel.value === "linear_regression") {
-            desc.innerHTML = '<strong>Linear Regression:</strong> Fits a straight line (y = mx + b) to all historical hourly data using ordinary least squares (OLS), then extrapolates forward. Good for capturing long-term trends.';
+            desc.innerHTML = '<strong>Linear Regression:</strong> Fits a straight line to all historical hourly data using ordinary least squares, then extrapolates forward. Best for showing a clean overall trend direction.';
           } else {
-            desc.innerHTML = '<strong>Moving Average:</strong> The forecast is based on the average of the last 6 historical hourly buckets, adjusted by the per-hour trend slope. Simple, robust, and easy to interpret.';
+            desc.innerHTML = '<strong>Seasonal Pattern:</strong> Averages traffic per hour-of-day across the full dataset history, then projects those daily rhythms forward with a trend adjustment. Produces realistic peaks and troughs rather than a flat line.';
           }
         });
       }
@@ -957,6 +966,10 @@
     var sensSel   = $("#anomaly-sensitivity");
     if (!dsSelect || !dsSelect.value) { window.alert("Please select a dataset first."); return; }
 
+    // Reset previous results.
+    var prevBanner = $("#anomaly-summary-banner");
+    if (prevBanner) prevBanner.classList.add("hidden");
+
     var runBtn = $("#anomaly-run");
     if (runBtn) { runBtn.disabled = true; runBtn.textContent = "Detecting…"; }
 
@@ -1016,34 +1029,74 @@
   }
 
   function renderAnomalyList(anomalies) {
-    var wrap = $("#anomaly-list-wrap");
-    var list = $("#anomaly-list");
+    var wrap   = $("#anomaly-list-wrap");
+    var list   = $("#anomaly-list");
+    var banner = $("#anomaly-summary-banner");
+    var bannerText = $("#anomaly-summary-text");
     if (!wrap || !list) return;
 
     if (!anomalies.length) {
       wrap.classList.add("hidden");
+      if (banner) {
+        banner.className = "rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 dark:border-emerald-800/40 dark:bg-emerald-950/20";
+        banner.classList.remove("hidden");
+        if (bannerText) bannerText.textContent = "No anomalies detected — traffic and error patterns look normal for this dataset.";
+        if (bannerText) bannerText.className = "text-sm font-medium text-emerald-700 dark:text-emerald-300";
+      }
       return;
+    }
+
+    // Build plain-English summary sentence.
+    var high   = anomalies.filter(function (a) { return a.severity === "high"; }).length;
+    var medium = anomalies.filter(function (a) { return a.severity === "medium"; }).length;
+    var low    = anomalies.filter(function (a) { return a.severity === "low"; }).length;
+    var parts  = [];
+    if (high)   parts.push(high   + " critical");
+    if (medium) parts.push(medium + " notable");
+    if (low)    parts.push(low    + " minor");
+    var summaryLine = "Found " + anomalies.length + " anomal" + (anomalies.length === 1 ? "y" : "ies") +
+      " — " + parts.join(", ") + ".";
+
+    if (banner) {
+      var isHigh = high > 0;
+      banner.className = "rounded-2xl border px-5 py-4 " + (
+        isHigh
+          ? "border-red-200 bg-red-50 dark:border-red-800/40 dark:bg-red-950/20"
+          : "border-amber-200 bg-amber-50 dark:border-amber-800/40 dark:bg-amber-950/20"
+      );
+      banner.classList.remove("hidden");
+      if (bannerText) {
+        bannerText.textContent = summaryLine;
+        bannerText.className = "text-sm font-medium " + (
+          isHigh
+            ? "text-red-700 dark:text-red-300"
+            : "text-amber-700 dark:text-amber-300"
+        );
+      }
     }
 
     wrap.classList.remove("hidden");
     list.innerHTML = "";
 
+    var typeLabels = { request_spike: "Traffic spike", error_rate_spike: "Error spike" };
+
     anomalies.forEach(function (a) {
-      var typeLabel = a.type === "request_spike" ? "Request Spike" : "Error Rate Spike";
+      var typeLabel = typeLabels[a.type] || a.type;
+      var dotColor  = a.severity === "high"
+        ? "bg-red-500"
+        : a.severity === "medium" ? "bg-amber-400" : "bg-slate-400";
+
       var item = document.createElement("div");
-      item.className = "flex flex-col gap-1 px-5 py-4 sm:flex-row sm:items-start sm:gap-4";
+      item.className = "flex items-start gap-4 px-5 py-4";
       item.innerHTML =
-        '<div class="flex items-center gap-2 sm:w-44 sm:shrink-0">' +
-        '<span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ' + severityBadge(a.severity) + '">' + escapeHtml(a.severity) + "</span>" +
-        '<span class="text-xs text-slate-500 dark:text-slate-400">' + escapeHtml(typeLabel) + "</span></div>" +
+        '<span class="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ' + dotColor + '"></span>' +
         '<div class="min-w-0 flex-1">' +
-        '<p class="text-sm font-medium text-slate-800 dark:text-slate-200">' + escapeHtml(a.label || a.timestamp || "") + "</p>" +
-        '<p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">' + escapeHtml(a.explanation || "") + "</p>" +
-        "</div>" +
-        '<div class="shrink-0 text-right text-xs text-slate-500 dark:text-slate-400">' +
-        'Value: <strong>' + escapeHtml(String(a.value)) + "</strong><br>" +
-        'Threshold: ' + escapeHtml(String(a.threshold)) +
-        "</div>";
+          '<p class="text-sm font-medium text-slate-800 dark:text-slate-200">' +
+            escapeHtml(a.label || "") +
+            ' <span class="ml-1 text-xs font-normal text-slate-400 dark:text-slate-500">· ' + escapeHtml(typeLabel) + '</span>' +
+          '</p>' +
+          '<p class="mt-0.5 text-sm text-slate-500 dark:text-slate-400">' + escapeHtml(a.explanation || "") + '</p>' +
+        '</div>';
       list.appendChild(item);
     });
   }
@@ -1057,15 +1110,10 @@
   async function initAlertsView() {
     if (!alertsInitDone) {
       alertsInitDone = true;
-      var createBtn = $("#alert-create");
-      if (createBtn && !createBtn._bound) {
-        createBtn._bound = true;
-        createBtn.addEventListener("click", createAlertRule);
-      }
       var checkBtn = $("#alerts-check");
       if (checkBtn && !checkBtn._bound) {
         checkBtn._bound = true;
-        checkBtn.addEventListener("click", checkAlerts);
+        checkBtn.addEventListener("click", runAutoCheck);
       }
     }
 
@@ -1075,157 +1123,87 @@
     if (dsSel && !dsSel._alertsBound) {
       dsSel._alertsBound = true;
       dsSel.addEventListener("change", function () {
-        if (dsSel.value) loadAlertsData(dsSel.value);
+        // Clear previous results when dataset changes.
+        var banner  = $("#alerts-status-banner");
+        var results = $("#alerts-results");
+        if (banner)  banner.classList.add("hidden");
+        if (results) results.classList.add("hidden");
       });
     }
-
-    if (dsSel && dsSel.value) loadAlertsData(dsSel.value);
   }
 
-  async function loadAlertsData(datasetId) {
-    var rulesList   = $("#alert-rules-list");
-    var historyList = $("#alert-history-list");
-    if (!datasetId) return;
-
-    try {
-      var data = await LogSightAPI.getAlerts(datasetId);
-      renderAlertRules(data.rules || [], datasetId);
-      renderAlertHistory(data.recent_alerts || []);
-    } catch (_) {
-      if (rulesList) rulesList.innerHTML = '<p class="px-5 py-4 text-sm text-red-500">Failed to load alert rules.</p>';
-    }
-  }
-
-  function renderAlertRules(rules, datasetId) {
-    var list = $("#alert-rules-list");
-    if (!list) return;
-
-    if (!rules.length) {
-      list.innerHTML = '<p class="px-5 py-6 text-center text-sm text-slate-500 dark:text-slate-400">No alert rules yet. Create one above.</p>';
-      return;
-    }
-
-    list.innerHTML = "";
-    rules.forEach(function (rule) {
-      var row = document.createElement("div");
-      row.className = "flex flex-col gap-2 px-5 py-4 sm:flex-row sm:items-center sm:justify-between";
-
-      var thresholdParts = [];
-      if (rule.error_rate_threshold != null) thresholdParts.push("Error rate &gt; " + rule.error_rate_threshold + "%");
-      if (rule.request_spike_multiplier != null) thresholdParts.push("Spike &gt; " + rule.request_spike_multiplier + "× mean");
-
-      row.innerHTML =
-        '<div class="min-w-0 flex-1">' +
-        '<div class="flex items-center gap-2">' +
-        '<p class="font-medium text-slate-800 dark:text-slate-200">' + escapeHtml(rule.name) + "</p>" +
-        '<span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ' + (rule.is_active ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300" : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400") + '">' + (rule.is_active ? "Active" : "Inactive") + "</span></div>" +
-        '<p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">' + (thresholdParts.join(" · ") || "No thresholds configured") + "</p>" +
-        '<p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">Triggered ' + (rule.alert_count || 0) + ' time(s)</p>' +
-        "</div>" +
-        '<button type="button" data-del-rule="' + escapeHtml(rule.id) + '" class="shrink-0 rounded-lg border border-red-200 px-2.5 py-1 text-xs font-medium text-red-600 transition hover:bg-red-50 dark:border-red-900/50 dark:text-red-400 dark:hover:bg-red-950/30">Delete</button>';
-
-      list.appendChild(row);
-    });
-
-    list.querySelectorAll("[data-del-rule]").forEach(function (btn) {
-      btn.addEventListener("click", async function () {
-        var ruleId = btn.getAttribute("data-del-rule");
-        if (!confirm("Delete this alert rule and all its history?")) return;
-        try {
-          await LogSightAPI.deleteAlertRule(datasetId, ruleId);
-          loadAlertsData(datasetId);
-        } catch (err) {
-          window.alert(err.message || "Deletion failed.");
-        }
-      });
-    });
-  }
-
-  function renderAlertHistory(history) {
-    var list = $("#alert-history-list");
-    if (!list) return;
-
-    if (!history.length) {
-      list.innerHTML = '<p class="px-5 py-6 text-center text-sm text-slate-500 dark:text-slate-400">No alerts triggered yet.</p>';
-      return;
-    }
-
-    list.innerHTML = "";
-    history.forEach(function (alert) {
-      var typeLabel = alert.alert_type === "error_rate" ? "Error Rate" : "Request Spike";
-      var row = document.createElement("div");
-      row.className = "flex flex-col gap-1 px-5 py-3 sm:flex-row sm:items-center sm:gap-4";
-      row.innerHTML =
-        '<div class="flex items-center gap-2 sm:w-40 sm:shrink-0">' +
-        '<span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ' + severityBadge(alert.severity) + '">' + escapeHtml(alert.severity) + "</span>" +
-        '<span class="text-xs text-slate-500 dark:text-slate-400">' + escapeHtml(typeLabel) + "</span></div>" +
-        '<p class="min-w-0 flex-1 text-sm text-slate-700 dark:text-slate-300">' + escapeHtml(alert.message) + "</p>" +
-        '<p class="shrink-0 text-xs text-slate-500 dark:text-slate-400">' + escapeHtml(formatDate(alert.triggered_at)) + "</p>";
-      list.appendChild(row);
-    });
-  }
-
-  async function createAlertRule() {
-    var dsSel  = $("#alerts-dataset");
-    var name   = $("#alert-name");
-    var errRate = $("#alert-error-rate");
-    var spike  = $("#alert-spike");
-    var msg    = $("#alert-create-msg");
-
-    if (!dsSel || !dsSel.value) { window.alert("Please select a dataset first."); return; }
-
-    var payload = {
-      name: (name && name.value.trim()) || "Alert Rule",
-      error_rate_threshold:     (errRate && errRate.value) ? parseFloat(errRate.value) : null,
-      request_spike_multiplier: (spike   && spike.value)   ? parseFloat(spike.value)   : null,
-    };
-    if (payload.error_rate_threshold === null && payload.request_spike_multiplier === null) {
-      window.alert("Please enter at least one threshold value.");
-      return;
-    }
-
-    try {
-      await LogSightAPI.createAlertRule(dsSel.value, payload);
-      if (name)    name.value    = "";
-      if (errRate) errRate.value = "";
-      if (spike)   spike.value   = "";
-      if (msg)     { msg.classList.remove("hidden"); setTimeout(function () { msg.classList.add("hidden"); }, 3000); }
-      loadAlertsData(dsSel.value);
-    } catch (err) {
-      window.alert(err.message || "Failed to create rule.");
-    }
-  }
-
-  async function checkAlerts() {
+  async function runAutoCheck() {
     var dsSel = $("#alerts-dataset");
     if (!dsSel || !dsSel.value) { window.alert("Please select a dataset first."); return; }
 
     var checkBtn = $("#alerts-check");
-    var resultBanner = $("#alerts-check-result");
     if (checkBtn) { checkBtn.disabled = true; checkBtn.textContent = "Checking…"; }
 
     try {
-      var result = await LogSightAPI.checkAlerts(dsSel.value);
-      if (resultBanner) {
-        resultBanner.classList.remove("hidden");
-        if (result.count === 0) {
-          resultBanner.textContent = "No thresholds exceeded — all clear.";
-          resultBanner.className = "rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300";
-        } else {
-          resultBanner.textContent = result.count + " alert(s) triggered! See history below.";
-          resultBanner.className = "rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300";
-        }
-        setTimeout(function () { resultBanner.classList.add("hidden"); }, 6000);
-      }
-      loadAlertsData(dsSel.value);
+      var data = await LogSightAPI.autoCheckAlerts(dsSel.value);
+      renderAutoCheckResults(data);
     } catch (err) {
-      window.alert(err.message || "Alert check failed.");
+      window.alert(err.message || "Health check failed.");
     } finally {
       if (checkBtn) {
         checkBtn.disabled = false;
-        checkBtn.innerHTML = '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg> Check Now';
+        checkBtn.innerHTML =
+          '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
+          '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>' +
+          ' Run Health Check';
       }
     }
+  }
+
+  function renderAutoCheckResults(data) {
+    var banner     = $("#alerts-status-banner");
+    var bannerText = $("#alerts-status-text");
+    var resultsEl  = $("#alerts-results");
+    if (!banner || !resultsEl) return;
+
+    var status = data.status || "ok";
+    var statusConfig = {
+      ok:       { border: "border-emerald-200", bg: "bg-emerald-50 dark:bg-emerald-950/20", text: "text-emerald-700 dark:text-emerald-300", label: "All clear — no issues detected." },
+      warning:  { border: "border-amber-200",   bg: "bg-amber-50 dark:bg-amber-950/20",     text: "text-amber-700 dark:text-amber-300",   label: "Warning — one or more checks need attention." },
+      critical: { border: "border-red-200",      bg: "bg-red-50 dark:bg-red-950/20",         text: "text-red-700 dark:text-red-300",       label: "Critical — immediate attention required." },
+    };
+    var cfg = statusConfig[status] || statusConfig.ok;
+
+    banner.className = "rounded-2xl border px-5 py-4 " + cfg.border + " " + cfg.bg;
+    banner.classList.remove("hidden");
+    if (bannerText) {
+      bannerText.textContent = cfg.label;
+      bannerText.className   = "text-sm font-semibold " + cfg.text;
+    }
+
+    resultsEl.innerHTML = "";
+    resultsEl.classList.remove("hidden");
+    resultsEl.classList.add("grid");
+
+    (data.results || []).forEach(function (r) {
+      var cardStatus = r.status || "ok";
+      var cardCfg = {
+        ok:       { border: "border-emerald-200/80", icon: "text-emerald-500", dot: "bg-emerald-500", label: "OK" },
+        warning:  { border: "border-amber-200/80",   icon: "text-amber-500",   dot: "bg-amber-400",   label: "Warning" },
+        critical: { border: "border-red-200/80",      icon: "text-red-500",     dot: "bg-red-500",     label: "Critical" },
+      }[cardStatus] || { border: "border-slate-200/80", icon: "text-slate-400", dot: "bg-slate-400", label: "OK" };
+
+      var card = document.createElement("div");
+      card.className = "card-lift rounded-2xl border " + cardCfg.border + " bg-white p-5 shadow-card dark:bg-slate-900/60";
+      card.innerHTML =
+        '<div class="flex items-center justify-between gap-2">' +
+          '<p class="text-sm font-semibold text-slate-800 dark:text-slate-200">' + escapeHtml(r.label || r.check) + '</p>' +
+          '<span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ' +
+            (cardStatus === "ok" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300" :
+             cardStatus === "warning" ? "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300" :
+             "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300") + '">' +
+            '<span class="h-1.5 w-1.5 rounded-full ' + cardCfg.dot + '"></span>' +
+            escapeHtml(cardCfg.label) +
+          '</span>' +
+        '</div>' +
+        '<p class="mt-3 text-sm text-slate-600 dark:text-slate-400">' + escapeHtml(r.message || "") + '</p>';
+      resultsEl.appendChild(card);
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -1280,12 +1258,642 @@
   // Boot
   // -------------------------------------------------------------------------
 
+  // -------------------------------------------------------------------------
+  // Dashboard date filter
+  // -------------------------------------------------------------------------
+
+  function initDashboardDateFilter() {
+    var toggleBtn = $("#dash-date-toggle");
+    var filterRow = $("#dashboard-date-filter");
+    var clearBtn  = $("#dash-date-clear");
+    var fromIn    = $("#dash-date-from");
+    var toIn      = $("#dash-date-to");
+
+    if (toggleBtn && !toggleBtn._bound) {
+      toggleBtn._bound = true;
+      toggleBtn.addEventListener("click", function () {
+        filterRow.classList.toggle("hidden");
+        filterRow.classList.toggle("flex");
+      });
+    }
+    if (clearBtn && !clearBtn._bound) {
+      clearBtn._bound = true;
+      clearBtn.addEventListener("click", function () {
+        if (fromIn) fromIn.value = "";
+        if (toIn)   toIn.value   = "";
+        filterRow.classList.add("hidden");
+        filterRow.classList.remove("flex");
+        loadDashboardData();
+      });
+    }
+    if (fromIn && !fromIn._dboundFilter) {
+      fromIn._dboundFilter = true;
+      fromIn.addEventListener("change", loadDashboardData);
+    }
+    if (toIn && !toIn._dboundFilter) {
+      toIn._dboundFilter = true;
+      toIn.addEventListener("change", loadDashboardData);
+    }
+  }
+
+  function getDashboardDateFilter() {
+    var from = $("#dash-date-from");
+    var to   = $("#dash-date-to");
+    return {
+      dateFrom: from && from.value ? from.value : null,
+      dateTo:   to   && to.value   ? to.value   : null,
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // Security Insights
+  // -------------------------------------------------------------------------
+
+  async function initSecurityView() {
+    await populateSelect("security-dataset");
+    var runBtn = $("#security-run");
+    if (runBtn && !runBtn._bound) {
+      runBtn._bound = true;
+      runBtn.addEventListener("click", runSecurityAnalysis);
+    }
+  }
+
+  async function runSecurityAnalysis() {
+    var dsSel = $("#security-dataset");
+    if (!dsSel || !dsSel.value) { window.alert("Please select a dataset first."); return; }
+    var runBtn = $("#security-run");
+    if (runBtn) { runBtn.disabled = true; runBtn.textContent = "Analysing…"; }
+    var empty = $("#security-empty");
+    if (empty) empty.classList.add("hidden");
+
+    try {
+      var data = await LogSightAPI.getSecurityInsights(dsSel.value);
+      renderSecurityResults(data);
+      updateStatPeriod(dsSel.value);
+    } catch (err) {
+      window.alert(err.message || "Security analysis failed.");
+    } finally {
+      if (runBtn) {
+        runBtn.disabled = false;
+        runBtn.innerHTML =
+          '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /></svg> Run Analysis';
+      }
+    }
+  }
+
+  function renderSecurityResults(data) {
+    var banner   = $("#security-banner");
+    var summary  = $("#security-summary");
+    var scoreBdg = $("#security-score-badge");
+    var findingsEl = $("#security-findings");
+    var empty    = $("#security-empty");
+
+    var score = data.risk_score || 0;
+    var scoreColor = score >= 60 ? "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300"
+                   : score >= 30 ? "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
+                   : "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300";
+    var bannerColor = score >= 60 ? "border-red-200 bg-red-50 dark:border-red-800/40 dark:bg-red-950/20"
+                    : score >= 30 ? "border-amber-200 bg-amber-50 dark:border-amber-800/40 dark:bg-amber-950/20"
+                    : "border-emerald-200 bg-emerald-50 dark:border-emerald-800/40 dark:bg-emerald-950/20";
+
+    if (banner) {
+      banner.className = "rounded-2xl border px-5 py-4 " + bannerColor;
+      banner.classList.remove("hidden");
+    }
+    if (summary) summary.textContent = data.summary || "Analysis complete.";
+    if (scoreBdg) {
+      scoreBdg.textContent = "Risk: " + score + "/100";
+      scoreBdg.className = "rounded-full px-3 py-1 text-sm font-bold " + scoreColor;
+    }
+
+    if (findingsEl) {
+      findingsEl.innerHTML = "";
+      var findings = data.findings || [];
+      if (!findings.length) {
+        if (empty) empty.classList.remove("hidden");
+        return;
+      }
+      findings.forEach(function (f) {
+        var severityBorder = f.severity === "high"
+          ? "border-red-200/80 dark:border-red-800/30"
+          : "border-amber-200/80 dark:border-amber-800/30";
+        var dotClass = f.severity === "high" ? "bg-red-500" : "bg-amber-400";
+
+        var card = document.createElement("div");
+        card.className = "card-lift rounded-2xl border " + severityBorder + " bg-white p-5 shadow-card dark:bg-slate-900/60";
+
+        var evidenceHtml = "";
+        if (f.evidence && f.evidence.length) {
+          evidenceHtml = '<ul class="mt-3 space-y-1">';
+          f.evidence.slice(0, 5).forEach(function (e) {
+            var line = e.ip || "";
+            if (e.endpoint) line += " → " + e.endpoint;
+            if (e.count)    line += " (" + e.count + " requests)";
+            if (e.path)     line += " [" + e.path + "]";
+            evidenceHtml += '<li class="font-mono text-xs text-slate-500 dark:text-slate-400">' + escapeHtml(line) + "</li>";
+          });
+          if (f.evidence.length > 5) evidenceHtml += '<li class="text-xs text-slate-400">…and ' + (f.evidence.length - 5) + ' more</li>';
+          evidenceHtml += '</ul>';
+        }
+
+        card.innerHTML =
+          '<div class="flex items-start gap-3">' +
+            '<span class="mt-1 h-2.5 w-2.5 shrink-0 rounded-full ' + dotClass + '"></span>' +
+            '<div class="min-w-0 flex-1">' +
+              '<p class="font-semibold text-slate-800 dark:text-slate-200">' + escapeHtml(f.title || f.type) + '</p>' +
+              '<p class="mt-1 text-sm text-slate-600 dark:text-slate-400">' + escapeHtml(f.description || "") + '</p>' +
+              evidenceHtml +
+            '</div>' +
+          '</div>';
+        findingsEl.appendChild(card);
+      });
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Dataset Comparison
+  // -------------------------------------------------------------------------
+
+  async function initCompareView() {
+    await populateSelect("compare-dataset-a");
+    await populateSelect("compare-dataset-b");
+    var runBtn = $("#compare-run");
+    if (runBtn && !runBtn._bound) {
+      runBtn._bound = true;
+      runBtn.addEventListener("click", runComparison);
+    }
+  }
+
+  async function runComparison() {
+    var selA = $("#compare-dataset-a");
+    var selB = $("#compare-dataset-b");
+    if (!selA || !selA.value || !selB || !selB.value) {
+      window.alert("Please select both datasets."); return;
+    }
+    if (selA.value === selB.value) {
+      window.alert("Please select two different datasets."); return;
+    }
+    var runBtn = $("#compare-run");
+    if (runBtn) { runBtn.disabled = true; runBtn.textContent = "Comparing…"; }
+
+    try {
+      var data = await LogSightAPI.compareDatasets(selA.value, selB.value);
+      renderComparisonResults(data);
+    } catch (err) {
+      window.alert(err.message || "Comparison failed.");
+    } finally {
+      if (runBtn) {
+        runBtn.disabled = false;
+        runBtn.innerHTML = '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg> Compare';
+      }
+    }
+  }
+
+  function renderComparisonResults(data) {
+    var results = $("#compare-results");
+    var empty   = $("#compare-empty");
+    var metricsEl = $("#compare-metrics-table");
+    var endpointsEl = $("#compare-endpoints-a");
+
+    if (!data.dataset_a || !data.dataset_b) return;
+    if (empty)   empty.classList.add("hidden");
+    if (results) { results.classList.remove("hidden"); }
+
+    var a = data.dataset_a.metrics || {};
+    var b = data.dataset_b.metrics || {};
+    var d = data.deltas || {};
+    var nameA = data.dataset_a.name || "Dataset A";
+    var nameB = data.dataset_b.name || "Dataset B";
+
+    function deltaSpan(val) {
+      if (val == null) return "";
+      var n = Number(val);
+      var sign = n > 0 ? "+" : "";
+      var cls  = n > 0 ? "text-red-500" : n < 0 ? "text-emerald-600" : "text-slate-400";
+      return '<span class="ml-1 text-xs ' + cls + '">' + sign + n.toFixed(1) + '</span>';
+    }
+
+    var rows = [
+      ["Total Requests",    formatNumber(a.total_requests),  formatNumber(b.total_requests),  d.total_requests],
+      ["Error Rate (%)",    a.error_rate != null ? Number(a.error_rate).toFixed(2) + "%" : "—", b.error_rate != null ? Number(b.error_rate).toFixed(2) + "%" : "—", d.error_rate],
+      ["Avg Response Size", a.avg_response_size ? formatNumber(a.avg_response_size) + " B" : "—", b.avg_response_size ? formatNumber(b.avg_response_size) + " B" : "—", null],
+      ["Unique Visitors",   formatNumber(a.unique_visitors), formatNumber(b.unique_visitors),  d.unique_visitors],
+    ];
+
+    if (metricsEl) {
+      var tableHtml = '<table class="min-w-full text-sm"><thead class="border-b border-slate-100 bg-slate-50/60 dark:border-slate-800 dark:bg-slate-800/20"><tr>' +
+        '<th class="px-5 py-3 text-left font-semibold text-slate-600 dark:text-slate-400">Metric</th>' +
+        '<th class="px-5 py-3 text-left font-semibold text-indigo-600 dark:text-indigo-400">' + escapeHtml(nameA) + '</th>' +
+        '<th class="px-5 py-3 text-left font-semibold text-amber-600 dark:text-amber-400">' + escapeHtml(nameB) + '</th>' +
+        '<th class="px-5 py-3 text-left font-semibold text-slate-500 dark:text-slate-400">Δ (B vs A)</th>' +
+        '</tr></thead><tbody class="divide-y divide-slate-100 dark:divide-slate-800">';
+      rows.forEach(function (r) {
+        tableHtml += '<tr><td class="px-5 py-3 text-slate-700 dark:text-slate-300">' + escapeHtml(r[0]) + '</td>' +
+          '<td class="px-5 py-3 font-medium text-slate-800 dark:text-slate-200">' + (r[1] || "—") + '</td>' +
+          '<td class="px-5 py-3 font-medium text-slate-800 dark:text-slate-200">' + (r[2] || "—") + '</td>' +
+          '<td class="px-5 py-3">' + deltaSpan(r[3]) + '</td></tr>';
+      });
+      tableHtml += '</tbody></table>';
+      metricsEl.innerHTML = tableHtml;
+    }
+
+    if (endpointsEl) {
+      var endpoints = data.dataset_a.top_endpoints || [];
+      endpointsEl.innerHTML = endpoints.length
+        ? endpoints.slice(0, 10).map(function (e) {
+            return '<div class="flex items-center justify-between gap-2 py-1 text-xs"><span class="font-mono truncate text-slate-600 dark:text-slate-400">' + escapeHtml(e.endpoint || e.path || "—") + '</span><span class="shrink-0 font-semibold text-slate-700 dark:text-slate-200">' + (e.count || 0).toLocaleString() + '</span></div>';
+          }).join("")
+        : '<p class="text-xs text-slate-400">No endpoint data.</p>';
+    }
+
+    // Traffic comparison chart
+    var hourlyA = data.dataset_a.hourly_traffic || {};
+    var hourlyB = data.dataset_b.hourly_traffic || {};
+    var hours = Array.from({length: 24}, function (_, i) { return String(i).padStart(2, "0") + ":00"; });
+    var valA  = hours.map(function (_, i) { return hourlyA[String(i)] || 0; });
+    var valB  = hours.map(function (_, i) { return hourlyB[String(i)] || 0; });
+    if (typeof LogSightCharts !== "undefined" && LogSightCharts.renderComparisonChart) {
+      LogSightCharts.renderComparisonChart("chart-compare-traffic", hours, valA, valB, nameA, nameB);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Advanced Search
+  // -------------------------------------------------------------------------
+
+  var searchPage = 1;
+  var SEARCH_FIELDS = [
+    { value: "keyword",    label: "Keyword (raw)" },
+    { value: "ip",         label: "IP Address" },
+    { value: "method",     label: "Method" },
+    { value: "endpoint",   label: "Endpoint" },
+    { value: "status",     label: "Status Code" },
+    { value: "date_from",  label: "Date from" },
+    { value: "date_to",    label: "Date to" },
+  ];
+  var SAVED_SEARCHES_KEY = "ls-saved-searches";
+
+  async function initSearchView() {
+    await populateSelect("search-dataset");
+
+    var addBtn = $("#search-add-filter");
+    if (addBtn && !addBtn._bound) {
+      addBtn._bound = true;
+      addBtn.addEventListener("click", function () { addFilterRow(); });
+    }
+    var runBtn = $("#search-run");
+    if (runBtn && !runBtn._bound) {
+      runBtn._bound = true;
+      runBtn.addEventListener("click", function () { searchPage = 1; runAdvancedSearch(); });
+    }
+    var saveBtn = $("#search-save");
+    if (saveBtn && !saveBtn._bound) {
+      saveBtn._bound = true;
+      saveBtn.addEventListener("click", saveCurrentSearch);
+    }
+
+    if (!$("#search-filter-rows").children.length) addFilterRow();
+    renderSavedSearches();
+  }
+
+  function addFilterRow(field, value) {
+    var container = $("#search-filter-rows");
+    if (!container) return;
+    var row = document.createElement("div");
+    row.className = "flex items-center gap-2";
+
+    var fieldSel = document.createElement("select");
+    fieldSel.className = "rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100";
+    SEARCH_FIELDS.forEach(function (f) {
+      var opt = document.createElement("option");
+      opt.value = f.value;
+      opt.textContent = f.label;
+      if (field && f.value === field) opt.selected = true;
+      fieldSel.appendChild(opt);
+    });
+
+    var valIn = document.createElement("input");
+    valIn.type = "text";
+    valIn.placeholder = "value…";
+    valIn.value = value || "";
+    valIn.className = "flex-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100";
+    valIn.addEventListener("keydown", function (e) { if (e.key === "Enter") { searchPage = 1; runAdvancedSearch(); } });
+
+    var rmBtn = document.createElement("button");
+    rmBtn.type = "button";
+    rmBtn.textContent = "✕";
+    rmBtn.className = "rounded-lg px-2 py-1 text-xs text-slate-400 hover:text-slate-600";
+    rmBtn.addEventListener("click", function () { container.removeChild(row); });
+
+    row.appendChild(fieldSel);
+    row.appendChild(valIn);
+    row.appendChild(rmBtn);
+    container.appendChild(row);
+  }
+
+  function getSearchFilters() {
+    var rows = $all("#search-filter-rows > div");
+    var params = {};
+    rows.forEach(function (row) {
+      var sel = row.querySelector("select");
+      var inp = row.querySelector("input");
+      if (sel && inp && inp.value.trim()) {
+        params[sel.value] = inp.value.trim();
+      }
+    });
+    return params;
+  }
+
+  async function runAdvancedSearch() {
+    var dsSel = $("#search-dataset");
+    if (!dsSel || !dsSel.value) { window.alert("Please select a dataset first."); return; }
+    var filters = getSearchFilters();
+    var runBtn = $("#search-run");
+    if (runBtn) { runBtn.disabled = true; runBtn.textContent = "Searching…"; }
+    var meta = $("#search-meta");
+    if (meta) meta.textContent = "Loading…";
+
+    try {
+      var params = {
+        page: searchPage,
+        pageSize: 25,
+        search:    filters.keyword  || "",
+        ip:        filters.ip       || "",
+        method:    filters.method   || "",
+        endpoint:  filters.endpoint || "",
+        status:    filters.status   || "all",
+        dateFrom:  filters.date_from || "",
+        dateTo:    filters.date_to   || "",
+      };
+      var result = await LogSightAPI.getLogLines(dsSel.value, params);
+      renderSearchResults(result);
+    } catch (err) {
+      if (meta) meta.textContent = "Error: " + (err.message || "search failed");
+    } finally {
+      if (runBtn) { runBtn.disabled = false; runBtn.innerHTML = '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg> Search'; }
+    }
+  }
+
+  function renderSearchResults(result) {
+    var wrap    = $("#search-results-wrap");
+    var tbody   = $("#search-results-body");
+    var countEl = $("#search-result-count");
+    var pageEl  = $("#search-page-info");
+    var prevBtn = $("#search-prev");
+    var nextBtn = $("#search-next");
+    var meta    = $("#search-meta");
+
+    if (!wrap || !tbody) return;
+    wrap.classList.remove("hidden");
+
+    var total = result.total || 0;
+    var from  = total ? (result.page - 1) * result.pageSize + 1 : 0;
+    var to    = (result.page - 1) * result.pageSize + (result.items || []).length;
+    if (countEl) countEl.textContent = total.toLocaleString() + " results";
+    if (meta)    meta.textContent    = "";
+    if (pageEl)  pageEl.textContent  = total ? from + "–" + to + " of " + total.toLocaleString() : "No results";
+    if (prevBtn) { prevBtn.disabled = result.page <= 1; prevBtn.onclick = function () { if (searchPage > 1) { searchPage--; runAdvancedSearch(); } }; }
+    if (nextBtn) { nextBtn.disabled = result.page >= result.totalPages; nextBtn.onclick = function () { if (searchPage < result.totalPages) { searchPage++; runAdvancedSearch(); } }; }
+
+    tbody.innerHTML = "";
+    (result.items || []).forEach(function (line, idx) {
+      var tr = document.createElement("tr");
+      tr.className = "table-row-animate border-b border-slate-100 font-mono text-xs dark:border-slate-800";
+      tr.style.animationDelay = idx * 20 + "ms";
+      var code = Number(line.status || 0);
+      var badgeCls = code >= 500 ? "border-red-200 bg-red-50 text-red-700" : code >= 400 ? "border-amber-200 bg-amber-50 text-amber-700" : code >= 200 ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-slate-50 text-slate-700";
+      tr.innerHTML =
+        '<td class="whitespace-nowrap px-4 py-2.5 text-slate-500">' + escapeHtml(formatDate(line.timestamp)) + "</td>" +
+        '<td class="px-4 py-2.5"><span class="inline-flex rounded px-1.5 py-0.5 text-[10px] font-semibold border ' + badgeCls + '">' + escapeHtml(line.status || "—") + "</span></td>" +
+        '<td class="px-4 py-2.5 text-slate-600">' + escapeHtml(line.method || "—") + "</td>" +
+        '<td class="px-4 py-2.5 text-slate-600">' + escapeHtml(line.ip_address || "—") + "</td>" +
+        '<td class="max-w-xs truncate px-4 py-2.5 text-slate-800 dark:text-slate-200">' + escapeHtml(line.endpoint || line.raw || "—") + "</td>";
+      tbody.appendChild(tr);
+    });
+  }
+
+  function saveCurrentSearch() {
+    var filters = getSearchFilters();
+    var dsSel   = $("#search-dataset");
+    if (!Object.keys(filters).length) { window.alert("Add at least one filter before saving."); return; }
+    var name = window.prompt("Name this search:");
+    if (!name) return;
+    var saved = JSON.parse(localStorage.getItem(SAVED_SEARCHES_KEY) || "[]");
+    saved.unshift({ name: name, filters: filters, datasetId: dsSel ? dsSel.value : "" });
+    if (saved.length > 10) saved = saved.slice(0, 10);
+    localStorage.setItem(SAVED_SEARCHES_KEY, JSON.stringify(saved));
+    renderSavedSearches();
+  }
+
+  function renderSavedSearches() {
+    var wrap = $("#search-saved-wrap");
+    var list = $("#search-saved-list");
+    if (!wrap || !list) return;
+    var saved = JSON.parse(localStorage.getItem(SAVED_SEARCHES_KEY) || "[]");
+    if (!saved.length) { wrap.classList.add("hidden"); return; }
+    wrap.classList.remove("hidden");
+    list.innerHTML = "";
+    saved.forEach(function (s, idx) {
+      var row = document.createElement("div");
+      row.className = "flex items-center justify-between gap-3 px-5 py-3";
+      var summary = Object.entries(s.filters).map(function (kv) { return kv[0] + ": " + kv[1]; }).join(" · ");
+      row.innerHTML =
+        '<div class="min-w-0 flex-1 cursor-pointer" data-load-search="' + idx + '">' +
+          '<p class="text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400">' + escapeHtml(s.name) + '</p>' +
+          '<p class="text-xs text-slate-400 truncate">' + escapeHtml(summary) + '</p>' +
+        '</div>' +
+        '<button type="button" data-del-search="' + idx + '" class="shrink-0 text-xs text-slate-400 hover:text-red-500">Remove</button>';
+      row.querySelector("[data-load-search]").addEventListener("click", function () {
+        var container = $("#search-filter-rows");
+        if (container) container.innerHTML = "";
+        Object.entries(s.filters).forEach(function (kv) { addFilterRow(kv[0], kv[1]); });
+        var dsSel = $("#search-dataset");
+        if (dsSel && s.datasetId) dsSel.value = s.datasetId;
+        searchPage = 1;
+        runAdvancedSearch();
+      });
+      row.querySelector("[data-del-search]").addEventListener("click", function () {
+        var items = JSON.parse(localStorage.getItem(SAVED_SEARCHES_KEY) || "[]");
+        items.splice(idx, 1);
+        localStorage.setItem(SAVED_SEARCHES_KEY, JSON.stringify(items));
+        renderSavedSearches();
+      });
+      list.appendChild(row);
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Live Ingestion Simulator
+  // -------------------------------------------------------------------------
+
+  var simulateAutoTimer = null;
+  var simulateTotalGenerated = 0;
+
+  async function initSimulateView() {
+    await populateSelect("simulate-dataset");
+    var onceBtn = $("#simulate-once");
+    var autoBtn = $("#simulate-auto");
+    if (onceBtn && !onceBtn._bound) {
+      onceBtn._bound = true;
+      onceBtn.addEventListener("click", function () { runSimulateBatch(false); });
+    }
+    if (autoBtn && !autoBtn._bound) {
+      autoBtn._bound = true;
+      autoBtn.addEventListener("click", toggleSimulateAuto);
+    }
+  }
+
+  async function runSimulateBatch(silent) {
+    var dsSel  = $("#simulate-dataset");
+    var countIn = $("#simulate-count");
+    if (!dsSel || !dsSel.value) { if (!silent) window.alert("Please select a target dataset first."); return; }
+    var count = Math.min(50, parseInt((countIn && countIn.value) || "10", 10) || 10);
+
+    try {
+      var data = await LogSightAPI.simulateLogs(dsSel.value, count);
+      simulateTotalGenerated += data.generated || 0;
+
+      var totalEl  = $("#simulate-total");
+      var lastEl   = $("#simulate-last");
+      var statusEl = $("#simulate-status");
+      var statsEl  = $("#simulate-stats");
+      var feed     = $("#simulate-feed");
+
+      if (statsEl) { statsEl.classList.remove("hidden"); statsEl.classList.add("grid"); }
+      if (totalEl)  totalEl.textContent  = simulateTotalGenerated.toLocaleString();
+      if (lastEl)   lastEl.textContent   = (data.generated || 0) + " entries";
+      if (statusEl) statusEl.textContent = simulateAutoTimer ? "● Streaming" : "Done";
+
+      if (feed && data.entries) {
+        if (feed.querySelector("p")) feed.innerHTML = "";
+        data.entries.slice(0, 10).forEach(function (e) {
+          var line = document.createElement("div");
+          var code = Number(e.status_code || 0);
+          var cls  = code >= 500 ? "text-red-500" : code >= 400 ? "text-amber-500" : "text-emerald-500";
+          line.className = "py-0.5 border-b border-slate-100/40 dark:border-slate-800/40";
+          line.innerHTML = '<span class="text-slate-400">' + new Date(e.timestamp).toLocaleTimeString() + '</span> ' +
+            '<span class="' + cls + '">' + escapeHtml(String(e.status_code)) + '</span> ' +
+            escapeHtml(e.method) + ' ' + escapeHtml(e.endpoint) + ' — ' + escapeHtml(e.ip_address);
+          feed.insertBefore(line, feed.firstChild);
+          // Keep feed trimmed to 100 lines.
+          while (feed.children.length > 100) feed.removeChild(feed.lastChild);
+        });
+      }
+    } catch (err) {
+      if (!silent) window.alert(err.message || "Simulation failed.");
+    }
+  }
+
+  function toggleSimulateAuto() {
+    var autoBtn  = $("#simulate-auto");
+    var statusEl = $("#simulate-status");
+    if (simulateAutoTimer) {
+      clearInterval(simulateAutoTimer);
+      simulateAutoTimer = null;
+      if (autoBtn)  autoBtn.innerHTML = '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> Auto (every 3s)';
+      if (statusEl) statusEl.textContent = "Stopped";
+    } else {
+      runSimulateBatch(false);
+      simulateAutoTimer = setInterval(function () { runSimulateBatch(true); }, 3000);
+      if (autoBtn)  autoBtn.innerHTML = '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> Stop';
+      if (statusEl) statusEl.textContent = "● Streaming";
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Notifications
+  // -------------------------------------------------------------------------
+
+  var notifPollTimer = null;
+
+  function initNotifications() {
+    var bell     = $("#notif-bell");
+    var dropdown = $("#notif-dropdown");
+    var markAll  = $("#notif-mark-all");
+
+    if (bell && !bell._bound) {
+      bell._bound = true;
+      bell.addEventListener("click", function (e) {
+        e.stopPropagation();
+        dropdown && dropdown.classList.toggle("hidden");
+        if (dropdown && !dropdown.classList.contains("hidden")) loadNotifications();
+      });
+    }
+    if (markAll && !markAll._bound) {
+      markAll._bound = true;
+      markAll.addEventListener("click", async function () {
+        try { await LogSightAPI.markAllNotifsRead(); } catch (_) {}
+        loadNotifications();
+      });
+    }
+    document.addEventListener("click", function (e) {
+      if (dropdown && !dropdown.classList.contains("hidden") && !bell.contains(e.target) && !dropdown.contains(e.target)) {
+        dropdown.classList.add("hidden");
+      }
+    });
+
+    pollNotifCount();
+    notifPollTimer = setInterval(pollNotifCount, 30000);
+  }
+
+  async function pollNotifCount() {
+    try {
+      var data  = await LogSightAPI.getNotifCount();
+      var badge = $("#notif-badge");
+      if (!badge) return;
+      var count = data.unread_count || 0;
+      badge.textContent = count > 99 ? "99+" : String(count);
+      badge.classList.toggle("hidden", count === 0);
+    } catch (_) {}
+  }
+
+  async function loadNotifications() {
+    var list = $("#notif-list");
+    if (!list) return;
+    try {
+      var data  = await LogSightAPI.getNotifications();
+      var notifs = data.notifications || [];
+      if (!notifs.length) {
+        list.innerHTML = '<p class="px-4 py-6 text-center text-xs text-slate-400">No notifications yet.</p>';
+        return;
+      }
+      list.innerHTML = "";
+      notifs.forEach(function (n) {
+        var item = document.createElement("div");
+        item.className = "notif-item" + (n.is_read ? "" : " unread");
+        var dotColor = n.severity === "critical" ? "bg-red-500" : n.severity === "warning" ? "bg-amber-400" : "bg-indigo-400";
+        item.innerHTML =
+          '<span class="notif-dot ' + dotColor + '"></span>' +
+          '<div class="min-w-0 flex-1">' +
+            '<p class="text-xs leading-snug text-slate-700 dark:text-slate-300">' + escapeHtml(n.message) + '</p>' +
+            '<p class="mt-0.5 text-[10px] text-slate-400">' + escapeHtml(formatDate(n.created_at)) + '</p>' +
+          '</div>';
+        if (!n.is_read) {
+          item.addEventListener("click", async function () {
+            try { await LogSightAPI.markNotifRead(n.id); } catch (_) {}
+            item.classList.remove("unread");
+            pollNotifCount();
+          });
+        }
+        list.appendChild(item);
+      });
+    } catch (_) {
+      list.innerHTML = '<p class="px-4 py-4 text-xs text-red-500">Failed to load notifications.</p>';
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Boot
+  // -------------------------------------------------------------------------
+
   document.addEventListener("DOMContentLoaded", function () {
     initTheme();
     initTopNavigation();
     initUpload();
     bindNav();
     initDashboardControls();
+    initDashboardDateFilter();
+    initNotifications();
 
     // Load backend preferences and apply widget visibility.
     LogSightAPI.getPreferences().then(function (prefs) {

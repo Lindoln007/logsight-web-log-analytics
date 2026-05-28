@@ -31,6 +31,7 @@ from .alerts import (
     delete_alert_rule,
     get_alert_history,
     check_and_trigger_alerts,
+    auto_check_alerts,
 )
 from .reports import generate_csv_report, generate_json_report
 
@@ -73,6 +74,7 @@ __all__ = [
     "delete_alert_rule",
     "get_alert_history",
     "check_and_trigger_alerts",
+    "auto_check_alerts",
     # Reports
     "generate_csv_report",
     "generate_json_report",

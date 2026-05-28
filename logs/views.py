@@ -8,13 +8,14 @@ from django.contrib.auth.decorators import login_required
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from django.views.decorators.http import require_GET, require_http_methods
+from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
 from logs.forms import DEFAULT_MAX_UPLOAD_SIZE, LogUploadForm
 from logs.models import AlertRule, Dataset
 from logs.services import (
     PAGE_SIZE_DEFAULT,
     PAGE_SIZE_MAX,
+    auto_check_alerts,
     check_and_trigger_alerts,
     compute_and_persist_analytics,
     create_alert_rule,
@@ -388,6 +389,22 @@ def log_entries_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
     date_from = request.GET.get("date_from", "").strip()
     date_to = request.GET.get("date_to", "").strip()
 
+    # Advanced search parameters (Module 5)
+    ip_address = request.GET.get("ip_address", "").strip()
+    method = request.GET.get("method", "").strip()
+    endpoint = request.GET.get("endpoint", "").strip()
+
+    status_min = None
+    status_max = None
+    try:
+        status_min = int(request.GET["status_min"])
+    except (KeyError, ValueError):
+        pass
+    try:
+        status_max = int(request.GET["status_max"])
+    except (KeyError, ValueError):
+        pass
+
     data = get_log_entries(
         dataset_id,
         request.user,
@@ -397,6 +414,11 @@ def log_entries_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
         search=search,
         date_from=date_from,
         date_to=date_to,
+        ip_address=ip_address,
+        method=method,
+        endpoint=endpoint,
+        status_min=status_min,
+        status_max=status_max,
     )
     return JsonResponse(data, status=200)
 
@@ -585,6 +607,24 @@ def alert_history_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
     return JsonResponse({"alerts": history, "count": len(history)}, status=200)
 
 
+@login_required
+@require_GET
+def auto_alerts_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
+    """
+    GET /logs/datasets/<id>/alerts/auto/
+
+    Run the two built-in smart health checks (error rate + traffic spike)
+    without requiring user-defined rules. Returns results immediately.
+    """
+    dataset = _get_user_dataset(request, dataset_id)
+    error   = _dataset_ready_or_error(dataset)
+    if error:
+        return error
+
+    data = auto_check_alerts(dataset_id, owner=request.user)
+    return JsonResponse(data, status=200)
+
+
 # ---------------------------------------------------------------------------
 # Report generation views
 # ---------------------------------------------------------------------------
@@ -677,3 +717,251 @@ def dashboard_preferences_view(request: HttpRequest) -> JsonResponse:
         },
         status=200,
     )
+
+
+# ---------------------------------------------------------------------------
+# Security insights view  (Module 1)
+# ---------------------------------------------------------------------------
+
+
+@login_required
+@require_GET
+def security_insights_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
+    """
+    GET /logs/datasets/<id>/security/
+
+    Run security checks (brute force, path scanning, sensitive paths,
+    high error concentration) and return findings + risk score.
+    """
+    dataset = _get_user_dataset(request, dataset_id)
+    error = _dataset_ready_or_error(dataset)
+    if error:
+        return error
+    from logs.services.security import get_security_insights
+    data = get_security_insights(dataset_id, owner=request.user)
+    return JsonResponse(data, status=200)
+
+
+# ---------------------------------------------------------------------------
+# Dataset comparison view  (Module 2)
+# ---------------------------------------------------------------------------
+
+
+@login_required
+@require_GET
+def comparison_view(request: HttpRequest) -> JsonResponse:
+    """
+    GET /logs/compare/?a=<id>&b=<id>
+
+    Return side-by-side analytics for two datasets plus percentage-change
+    deltas.  Both datasets must belong to the authenticated user.
+    """
+    a = request.GET.get("a", "").strip()
+    b = request.GET.get("b", "").strip()
+
+    if not a or not b:
+        return JsonResponse(
+            {"error": "Both 'a' and 'b' dataset IDs are required as query parameters."},
+            status=400,
+        )
+
+    try:
+        dataset_id_a = int(a)
+        dataset_id_b = int(b)
+    except ValueError:
+        return JsonResponse({"error": "'a' and 'b' must be integer dataset IDs."}, status=400)
+
+    from logs.services.comparison import compare_datasets
+    try:
+        data = compare_datasets(dataset_id_a, dataset_id_b, owner=request.user)
+    except Exception as exc:
+        return JsonResponse({"error": str(exc)}, status=404)
+
+    return JsonResponse(data, status=200)
+
+
+# ---------------------------------------------------------------------------
+# Analytics filtered summary view  (Module 3)
+# ---------------------------------------------------------------------------
+
+
+@login_required
+@require_GET
+def analytics_filtered_summary_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
+    """
+    GET /logs/datasets/<id>/analytics/filtered-summary/
+
+    Return aggregate metrics for the dataset optionally bounded by a date range.
+
+    Query parameters
+    ----------------
+    date_from : ISO 8601 datetime string — inclusive lower bound
+    date_to   : ISO 8601 datetime string — inclusive upper bound
+    """
+    from django.utils.dateparse import parse_datetime
+    from logs.services.analytics import get_filtered_summary
+
+    _get_user_dataset(request, dataset_id)
+
+    date_from = None
+    date_to = None
+
+    raw_from = request.GET.get("date_from", "").strip()
+    raw_to = request.GET.get("date_to", "").strip()
+
+    if raw_from:
+        date_from = parse_datetime(raw_from)
+        if date_from is None:
+            return JsonResponse(
+                {"error": f"Cannot parse date_from='{raw_from}'. Use ISO 8601 format."},
+                status=400,
+            )
+
+    if raw_to:
+        date_to = parse_datetime(raw_to)
+        if date_to is None:
+            return JsonResponse(
+                {"error": f"Cannot parse date_to='{raw_to}'. Use ISO 8601 format."},
+                status=400,
+            )
+
+    data = get_filtered_summary(dataset_id, owner=request.user, date_from=date_from, date_to=date_to)
+    return JsonResponse(data, status=200)
+
+
+# ---------------------------------------------------------------------------
+# Notification views  (Module 4)
+# ---------------------------------------------------------------------------
+
+
+@login_required
+@require_GET
+def notifications_list_view(request: HttpRequest) -> JsonResponse:
+    """GET /logs/notifications/ — return recent notifications and unread count."""
+    from logs.services.notifications import get_notifications, get_unread_count
+
+    unread_only = request.GET.get("unread_only", "").lower() in ("1", "true", "yes")
+    limit = min(_parse_int_param(request, "limit", 50), 200)
+
+    notifications = get_notifications(request.user, unread_only=unread_only, limit=limit)
+    unread_count = get_unread_count(request.user)
+
+    return JsonResponse(
+        {"notifications": notifications, "unread_count": unread_count},
+        status=200,
+    )
+
+
+@login_required
+@require_POST
+def notifications_mark_read_view(request: HttpRequest, notification_id: int) -> JsonResponse:
+    """POST /logs/notifications/<id>/read/ — mark a single notification as read."""
+    from logs.services.notifications import mark_read
+
+    updated = mark_read(notification_id, user=request.user)
+    if not updated:
+        return JsonResponse({"error": "Notification not found."}, status=404)
+    return JsonResponse({"marked_read": True, "notification_id": notification_id}, status=200)
+
+
+@login_required
+@require_POST
+def notifications_mark_all_read_view(request: HttpRequest) -> JsonResponse:
+    """POST /logs/notifications/read-all/ — mark all notifications as read."""
+    from logs.services.notifications import mark_all_read
+
+    count = mark_all_read(user=request.user)
+    return JsonResponse({"marked_read": count}, status=200)
+
+
+@login_required
+@require_GET
+def notifications_count_view(request: HttpRequest) -> JsonResponse:
+    """GET /logs/notifications/count/ — return the unread notification count."""
+    from logs.services.notifications import get_unread_count
+
+    return JsonResponse({"unread_count": get_unread_count(request.user)}, status=200)
+
+
+# ---------------------------------------------------------------------------
+# Log simulator view  (Module 6)
+# ---------------------------------------------------------------------------
+
+
+@login_required
+@require_POST
+def simulate_logs_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
+    """
+    POST /logs/datasets/<id>/simulate/
+
+    Generate synthetic log entries and append them to the dataset.
+
+    Query parameters
+    ----------------
+    count : int — number of entries to generate (default 10, max 50)
+    """
+    _get_user_dataset(request, dataset_id)
+
+    count = min(_parse_int_param(request, "count", 10), 50)
+
+    from logs.services.simulator import generate_log_entries
+    try:
+        data = generate_log_entries(dataset_id, owner=request.user, count=count)
+    except Exception as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+
+    return JsonResponse(data, status=201)
+
+
+# ---------------------------------------------------------------------------
+# RBAC admin views  (Module 7)
+# ---------------------------------------------------------------------------
+
+
+@login_required
+@require_GET
+def user_management_view(request: HttpRequest) -> JsonResponse:
+    """
+    GET /logs/admin/users/
+
+    Return all users with their profiles.  Admin only.
+    """
+    from logs.services.rbac import get_all_users_with_profiles, get_or_create_profile
+
+    profile = get_or_create_profile(request.user)
+    if not profile.is_admin:
+        return JsonResponse({"error": "Admin access required."}, status=403)
+
+    users = get_all_users_with_profiles()
+    return JsonResponse({"users": users, "count": len(users)}, status=200)
+
+
+@login_required
+@require_POST
+def assign_role_view(request: HttpRequest, user_id: int) -> JsonResponse:
+    """
+    POST /logs/admin/users/<user_id>/role/
+
+    Assign a role to a user.  Body: {"role": "analyst"}  Admin only.
+    """
+    from logs.services.rbac import assign_role
+
+    try:
+        body = json.loads(request.body)
+    except (ValueError, KeyError):
+        return JsonResponse({"error": "Invalid JSON body."}, status=400)
+
+    role = body.get("role", "").strip()
+    if not role:
+        return JsonResponse({"error": "'role' field is required."}, status=400)
+
+    try:
+        profile = assign_role(user_id, role, requesting_user=request.user)
+    except PermissionError as exc:
+        return JsonResponse({"error": str(exc)}, status=403)
+    except ValueError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+    except Exception as exc:
+        return JsonResponse({"error": str(exc)}, status=404)
+
+    return JsonResponse({"profile": profile}, status=200)

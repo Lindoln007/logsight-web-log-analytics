@@ -702,6 +702,106 @@
       return result.data;
     },
 
+    /** Run the built-in smart health checks (no user rules required). */
+    async autoCheckAlerts(datasetId) {
+      var id = datasetId || _currentDatasetId;
+      if (!id) throw new Error("No dataset selected.");
+
+      var result = await fetchJson(
+        "/logs/datasets/" + encodeURIComponent(id) + "/alerts/auto/",
+        { method: "GET" }
+      );
+      if (!result.ok) throw new Error("Health check failed.");
+      return result.data;
+    },
+
+    // ---- Security Insights --------------------------------------------------
+
+    async getSecurityInsights(datasetId) {
+      var id = datasetId || _currentDatasetId;
+      if (!id) throw new Error("No dataset selected.");
+      var result = await fetchJson("/logs/datasets/" + encodeURIComponent(id) + "/security/");
+      if (!result.ok) throw new Error("Security analysis failed.");
+      return result.data;
+    },
+
+    // ---- Dataset Comparison -------------------------------------------------
+
+    async compareDatasets(idA, idB) {
+      if (!idA || !idB) throw new Error("Two dataset IDs required.");
+      var result = await fetchJson("/logs/compare/?a=" + encodeURIComponent(idA) + "&b=" + encodeURIComponent(idB));
+      if (!result.ok) throw new Error("Comparison failed.");
+      return result.data;
+    },
+
+    // ---- Filtered Summary (dashboard date range) ----------------------------
+
+    async getFilteredSummary(datasetId, dateFrom, dateTo) {
+      var id = datasetId || _currentDatasetId;
+      if (!id) throw new Error("No dataset selected.");
+      var qs = "";
+      if (dateFrom) qs += "?date_from=" + encodeURIComponent(dateFrom);
+      if (dateTo)   qs += (qs ? "&" : "?") + "date_to=" + encodeURIComponent(dateTo);
+      var result = await fetchJson("/logs/datasets/" + encodeURIComponent(id) + "/analytics/filtered-summary/" + qs);
+      if (!result.ok) throw new Error("Filtered summary failed.");
+      return result.data;
+    },
+
+    // ---- Notifications ------------------------------------------------------
+
+    async getNotifications(unreadOnly) {
+      var qs = unreadOnly ? "?unread=1" : "";
+      var result = await fetchJson("/logs/notifications/" + qs);
+      if (!result.ok) throw new Error("Failed to load notifications.");
+      return result.data;
+    },
+
+    async getNotifCount() {
+      var result = await fetchJson("/logs/notifications/count/");
+      if (!result.ok) return { unread_count: 0 };
+      return result.data;
+    },
+
+    async markNotifRead(notifId) {
+      var result = await fetchJson("/logs/notifications/" + encodeURIComponent(notifId) + "/read/", { method: "POST" });
+      return result.ok;
+    },
+
+    async markAllNotifsRead() {
+      var result = await fetchJson("/logs/notifications/read-all/", { method: "POST" });
+      return result.ok;
+    },
+
+    // ---- Log Simulator ------------------------------------------------------
+
+    async simulateLogs(datasetId, count) {
+      var id = datasetId || _currentDatasetId;
+      if (!id) throw new Error("No dataset selected.");
+      var result = await fetchJson(
+        "/logs/datasets/" + encodeURIComponent(id) + "/simulate/?count=" + (count || 10),
+        { method: "POST" }
+      );
+      if (!result.ok) throw new Error("Simulation failed.");
+      return result.data;
+    },
+
+    // ---- RBAC ---------------------------------------------------------------
+
+    async getUsers() {
+      var result = await fetchJson("/logs/admin/users/");
+      if (!result.ok) throw new Error("Failed to load users.");
+      return result.data;
+    },
+
+    async assignRole(userId, role) {
+      var result = await fetchJson(
+        "/logs/admin/users/" + encodeURIComponent(userId) + "/role/",
+        { method: "POST", body: JSON.stringify({ role: role }) }
+      );
+      if (!result.ok) throw new Error("Role assignment failed.");
+      return result.data;
+    },
+
     // ---- Reports ------------------------------------------------------------
 
     /**
