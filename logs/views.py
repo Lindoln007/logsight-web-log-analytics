@@ -207,6 +207,24 @@ def _parse_int_param(request: HttpRequest, name: str, default: int, minimum: int
         return default
 
 
+def _parse_date_param(request: HttpRequest, name: str, end_of_day: bool = False):
+    """
+    Parse a YYYY-MM-DD query-string date into an aware datetime, or return None.
+    When end_of_day=True the time is set to 23:59:59 so the whole day is included.
+    """
+    from datetime import date as _date, datetime as _datetime, timezone as _tz
+    val = request.GET.get(name, "").strip()
+    if not val:
+        return None
+    try:
+        d = _date.fromisoformat(val)
+        if end_of_day:
+            return _datetime(d.year, d.month, d.day, 23, 59, 59, tzinfo=_tz.utc)
+        return _datetime(d.year, d.month, d.day, 0, 0, 0, tzinfo=_tz.utc)
+    except ValueError:
+        return None
+
+
 @login_required
 @require_GET
 def analytics_overview_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
@@ -256,11 +274,15 @@ def analytics_summary_view(request: HttpRequest, dataset_id: int) -> JsonRespons
 def analytics_status_distribution_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
     """
     GET /logs/datasets/<id>/analytics/status-distribution/
-
-    Return per-status-code counts and per-category (1xx–5xx) aggregates.
+    Accepts ?date_from=YYYY-MM-DD and ?date_to=YYYY-MM-DD for date filtering.
     """
     _get_user_dataset(request, dataset_id)
-    return JsonResponse(get_status_distribution(dataset_id, owner=request.user), status=200)
+    date_from = _parse_date_param(request, "date_from")
+    date_to   = _parse_date_param(request, "date_to", end_of_day=True)
+    return JsonResponse(
+        get_status_distribution(dataset_id, owner=request.user, date_from=date_from, date_to=date_to),
+        status=200,
+    )
 
 
 @login_required
@@ -268,18 +290,19 @@ def analytics_status_distribution_view(request: HttpRequest, dataset_id: int) ->
 def analytics_request_trends_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
     """
     GET /logs/datasets/<id>/analytics/request-trends/
-
-    Return time-series request counts.  Accepts:
-      ?interval=hour|day   — bucket granularity (default: hour)
-      ?limit=N             — max data points returned (default: 168)
+    Accepts ?interval=hour|day, ?limit=N, ?date_from=YYYY-MM-DD, ?date_to=YYYY-MM-DD.
     """
     _get_user_dataset(request, dataset_id)
-
-    interval = request.GET.get("interval", "hour")
-    limit = _parse_int_param(request, "limit", DEFAULT_TRENDS_LIMIT)
-
+    interval  = request.GET.get("interval", "hour")
+    limit     = _parse_int_param(request, "limit", DEFAULT_TRENDS_LIMIT)
+    date_from = _parse_date_param(request, "date_from")
+    date_to   = _parse_date_param(request, "date_to", end_of_day=True)
     return JsonResponse(
-        get_request_trends(dataset_id, owner=request.user, interval=interval, limit=limit),
+        get_request_trends(
+            dataset_id, owner=request.user,
+            interval=interval, limit=limit,
+            date_from=date_from, date_to=date_to,
+        ),
         status=200,
     )
 
@@ -289,16 +312,18 @@ def analytics_request_trends_view(request: HttpRequest, dataset_id: int) -> Json
 def analytics_top_endpoints_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
     """
     GET /logs/datasets/<id>/analytics/top-endpoints/
-
-    Return the most frequently accessed endpoints ranked by request count.
-    Accepts:
-      ?limit=N   — number of endpoints (default: 10, max: 100)
+    Accepts ?limit=N, ?date_from=YYYY-MM-DD, ?date_to=YYYY-MM-DD.
     """
     _get_user_dataset(request, dataset_id)
-    limit = _parse_int_param(request, "limit", DEFAULT_TOP_ENDPOINTS_LIMIT)
-
+    limit     = _parse_int_param(request, "limit", DEFAULT_TOP_ENDPOINTS_LIMIT)
+    date_from = _parse_date_param(request, "date_from")
+    date_to   = _parse_date_param(request, "date_to", end_of_day=True)
     return JsonResponse(
-        get_top_endpoints(dataset_id, owner=request.user, limit=min(limit, MAX_TOP_ENDPOINTS_LIMIT)),
+        get_top_endpoints(
+            dataset_id, owner=request.user,
+            limit=min(limit, MAX_TOP_ENDPOINTS_LIMIT),
+            date_from=date_from, date_to=date_to,
+        ),
         status=200,
     )
 
@@ -308,12 +333,15 @@ def analytics_top_endpoints_view(request: HttpRequest, dataset_id: int) -> JsonR
 def analytics_hourly_traffic_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
     """
     GET /logs/datasets/<id>/analytics/hourly-traffic/
-
-    Return request count for each hour of the day (0–23), plus the peak
-    and quiet hours.
+    Accepts ?date_from=YYYY-MM-DD, ?date_to=YYYY-MM-DD.
     """
     _get_user_dataset(request, dataset_id)
-    return JsonResponse(get_hourly_traffic(dataset_id, owner=request.user), status=200)
+    date_from = _parse_date_param(request, "date_from")
+    date_to   = _parse_date_param(request, "date_to", end_of_day=True)
+    return JsonResponse(
+        get_hourly_traffic(dataset_id, owner=request.user, date_from=date_from, date_to=date_to),
+        status=200,
+    )
 
 
 @login_required
@@ -905,17 +933,172 @@ def simulate_logs_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
     count = min(_parse_int_param(request, "count", 10), 50)
 
     from logs.services.simulator import generate_log_entries
+    from logs.services.alerts import auto_check_alerts
     try:
         data = generate_log_entries(dataset_id, owner=request.user, count=count)
+    except Exception as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+
+    # Run health check after ingestion so alerts fire automatically.
+    try:
+        check = auto_check_alerts(dataset_id, owner=request.user)
+        data["alert_status"] = check.get("status", "ok")
+    except Exception:
+        data["alert_status"] = "ok"
+
+    return JsonResponse(data, status=201)
+
+
+@login_required
+@require_POST
+def simulate_error_spike_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
+    """POST /logs/datasets/<id>/simulate/error-spike/ — inject high-error entries."""
+    dataset = _get_user_dataset(request, dataset_id)
+    error   = _dataset_ready_or_error(dataset)
+    if error:
+        return error
+
+    from logs.services.simulator import simulate_error_spike
+    from logs.services.alerts import auto_check_alerts
+    try:
+        data  = simulate_error_spike(dataset_id, owner=request.user)
+        check = auto_check_alerts(dataset_id, owner=request.user)
+        data["alert_status"] = check.get("status", "ok")
+        data["alert_results"] = check.get("results", [])
     except Exception as exc:
         return JsonResponse({"error": str(exc)}, status=400)
 
     return JsonResponse(data, status=201)
 
 
+@login_required
+@require_POST
+def simulate_traffic_spike_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
+    """POST /logs/datasets/<id>/simulate/traffic-spike/ — inject burst entries."""
+    dataset = _get_user_dataset(request, dataset_id)
+    error   = _dataset_ready_or_error(dataset)
+    if error:
+        return error
+
+    from logs.services.simulator import simulate_traffic_spike
+    from logs.services.alerts import auto_check_alerts
+    try:
+        data  = simulate_traffic_spike(dataset_id, owner=request.user)
+        check = auto_check_alerts(dataset_id, owner=request.user)
+        data["alert_status"] = check.get("status", "ok")
+        data["alert_results"] = check.get("results", [])
+    except Exception as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+
+    return JsonResponse(data, status=201)
+
+
+@login_required
+@require_GET
+def simulate_download_view(request: HttpRequest, dataset_id: int) -> HttpResponse:
+    """GET /logs/datasets/<id>/simulate/download/ — download simulated entries as CSV."""
+    import csv
+    _get_user_dataset(request, dataset_id)
+
+    from logs.models import LogEntry
+    entries = (
+        LogEntry.objects
+        .filter(
+            dataset_id=dataset_id,
+            dataset__owner=request.user,
+            user_agent__startswith="LogSight-Simulator",
+        )
+        .order_by("-timestamp")[:5000]
+    )
+
+    response = HttpResponse(content_type="text/csv")
+    response["Content-Disposition"] = f'attachment; filename="simulated_logs_{dataset_id}.csv"'
+
+    writer = csv.writer(response)
+    writer.writerow(["timestamp", "method", "endpoint", "status_code", "ip_address", "response_size"])
+    for e in entries:
+        writer.writerow([
+            e.timestamp.isoformat(),
+            e.method,
+            e.endpoint,
+            e.status_code,
+            e.ip_address,
+            e.response_size or "",
+        ])
+
+    return response
+
+
+@login_required
+@require_GET
+def all_alerts_history_view(request: HttpRequest) -> JsonResponse:
+    """GET /logs/alerts/all-history/ — return triggered alerts across all datasets."""
+    from logs.services.alerts import get_all_alert_history
+    limit   = min(_parse_int_param(request, "limit", 100), 500)
+    history = get_all_alert_history(owner=request.user, limit=limit)
+    return JsonResponse({"alerts": history, "count": len(history)}, status=200)
+
+
 # ---------------------------------------------------------------------------
 # RBAC admin views  (Module 7)
 # ---------------------------------------------------------------------------
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def invites_view(request: HttpRequest) -> JsonResponse:
+    """
+    GET  /logs/invites/  — list all invites (admin only).
+    POST /logs/invites/  — create a new invite (admin only).
+    """
+    from logs.services.rbac import get_or_create_profile
+    from logs.services.invites import create_invite, list_invites
+
+    profile = get_or_create_profile(request.user)
+    if not profile.is_admin:
+        return JsonResponse({"error": "Admin access required."}, status=403)
+
+    if request.method == "GET":
+        return JsonResponse({"invites": list_invites(request.user)}, status=200)
+
+    try:
+        body = json.loads(request.body)
+    except (ValueError, KeyError):
+        return JsonResponse({"error": "Invalid JSON."}, status=400)
+
+    email = (body.get("email") or "").strip().lower()
+    role  = body.get("role", "analyst")
+
+    if not email:
+        return JsonResponse({"error": "Email is required."}, status=400)
+    if role not in ("analyst", "viewer"):
+        return JsonResponse({"error": "Role must be analyst or viewer."}, status=400)
+
+    try:
+        invite = create_invite(email=email, role=role, invited_by=request.user)
+    except Exception as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+
+    return JsonResponse({"invite": invite}, status=201)
+
+
+@login_required
+@require_http_methods(["DELETE", "POST"])
+def revoke_invite_view(request: HttpRequest, invite_id: int) -> JsonResponse:
+    """
+    DELETE /logs/invites/<id>/  — revoke an unused invite (admin only).
+    """
+    from logs.services.rbac import get_or_create_profile
+    from logs.services.invites import revoke_invite
+
+    profile = get_or_create_profile(request.user)
+    if not profile.is_admin:
+        return JsonResponse({"error": "Admin access required."}, status=403)
+
+    revoked = revoke_invite(invite_id, admin_user=request.user)
+    if not revoked:
+        return JsonResponse({"error": "Invite not found or already used."}, status=404)
+    return JsonResponse({"revoked": True, "invite_id": invite_id}, status=200)
 
 
 @login_required

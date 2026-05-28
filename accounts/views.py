@@ -23,14 +23,46 @@ def register_view(request):
     if request.user.is_authenticated:
         return redirect("app-shell")
 
-    form = RegistrationForm(request.POST or None)
-    if request.method == "POST" and form.is_valid():
-        user = form.save()
-        login(request, user)
-        messages.success(request, "Your account has been created successfully.")
-        return redirect("app-shell")
+    from logs.services.invites import validate_invite, redeem_invite
 
-    return render(request, "accounts/register.html", {"form": form})
+    token_str = request.GET.get("invite") or request.POST.get("invite_token", "")
+    invite    = validate_invite(token_str) if token_str else None
+
+    # No valid token → show invitation-only gate, no form.
+    if not invite:
+        return render(request, "accounts/register.html", {
+            "invite_required": True,
+            "invite_invalid":  bool(token_str),  # True = bad token, False = none at all
+        })
+
+    # Valid token → show the registration form pre-filled with the invited email.
+    if request.method == "POST":
+        form = RegistrationForm(request.POST)
+        # Force the email to the invited address regardless of what was submitted.
+        form.data = form.data.copy()
+        form.data["email"] = invite.email
+
+        if form.is_valid():
+            user = form.save(commit=False)
+            user.email = invite.email
+            user.save()
+            redeem_invite(token_str, user)
+            login(request, user)
+            messages.success(request, f"Welcome to LogSight! You've been added as {invite.role.capitalize()}.")
+            return redirect("app-shell")
+    else:
+        form = RegistrationForm(initial={"email": invite.email})
+
+    # Make the email field read-only — the invite address is fixed.
+    form.fields["email"].widget.attrs["readonly"] = True
+    form.fields["email"].widget.attrs["class"] += " opacity-60 cursor-not-allowed"
+
+    return render(request, "accounts/register.html", {
+        "form":        form,
+        "invite":      invite,
+        "token_str":   token_str,
+        "invite_valid": True,
+    })
 
 
 @require_http_methods(["POST"])

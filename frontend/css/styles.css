@@ -856,22 +856,30 @@ pre {
   position: relative;
 }
 
-/* Auth screens inherit the same light product system */
+/* Auth screens — deep atmospheric background, focused white card */
 .auth-shell {
   min-height: 100vh;
   background:
-    radial-gradient(circle at 16% 0%, rgba(255, 255, 255, 0.9), transparent 30rem),
-    linear-gradient(180deg, #f7f9fb 0%, #eef2f5 100%);
+    radial-gradient(ellipse at 68% 18%, rgba(15, 127, 156, 0.2) 0%, transparent 52%),
+    radial-gradient(ellipse at 12% 82%, rgba(15, 127, 156, 0.1) 0%, transparent 44%),
+    linear-gradient(165deg, #111923 0%, #0e1620 55%, #0c1419 100%);
   color: var(--ls-text);
 }
 
-.auth-panel,
-.auth-visual {
-  border: 0;
+.auth-shell .brand-title { color: rgba(238, 246, 251, 0.95); }
+.auth-shell .brand-title-secondary { color: rgba(228, 241, 248, 0.75); }
+
+.auth-panel {
   border-radius: 22px;
-  background: rgba(255, 255, 255, 0.72);
-  box-shadow: var(--ls-shadow-soft);
-  backdrop-filter: blur(14px);
+  background: #ffffff;
+  box-shadow: 0 32px 72px -24px rgba(0, 0, 0, 0.52), 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+.auth-visual {
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  backdrop-filter: blur(18px);
 }
 
 .auth-log-line {
@@ -879,13 +887,13 @@ pre {
   grid-template-columns: 4.5rem 4rem 1fr;
   gap: 0.75rem;
   padding: 0.62rem 0;
-  color: var(--ls-muted);
+  color: rgba(178, 204, 220, 0.7);
   font-family: var(--ls-mono);
   font-size: 0.72rem;
 }
 
 .auth-log-line strong {
-  color: var(--ls-accent);
+  color: #5ed0e8;
   font-weight: 700;
 }
 

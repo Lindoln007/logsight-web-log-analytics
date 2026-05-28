@@ -25,7 +25,8 @@
         },
       };
     </script>
-    <link rel="stylesheet" href="css/styles.css?v=20260523-v4-topnav" />
+    <link rel="stylesheet" href="css/styles.css?v=20260528-v2" />
+    <script>window.LOGSIGHT_USER_ROLE = "{{ user_role }}";</script>
   </head>
   <body class="h-full min-h-screen bg-slate-50 text-slate-900 antialiased">
     {% if messages %}
@@ -78,6 +79,12 @@
                 <a href="#/simulate" data-route="simulate">Live Ingestion<span>Simulate real-time log data</span></a>
               </div>
             </div>
+            <div id="nav-admin-group" class="top-nav-group hidden" data-nav-item data-nav-section="admin">
+              <button type="button" class="top-nav-link" aria-haspopup="true">Admin</button>
+              <div class="nav-dropdown nav-dropdown--compact">
+                <a href="#/users" data-route="users">User Management<span>Roles and access control</span></a>
+              </div>
+            </div>
           </nav>
 
           <div class="topbar-actions">
@@ -127,6 +134,8 @@
           <a href="#/alerts" data-route="alerts">Alerts</a>
           <a href="#/security" data-route="security">Security Insights</a>
           <a href="#/simulate" data-route="simulate">Live Ingestion</a>
+          <p id="mobile-admin-label" class="hidden">Admin</p>
+          <a id="mobile-admin-users" href="#/users" data-route="users" class="hidden">User Management</a>
         </div>
       </header>
 
@@ -155,16 +164,18 @@
                   <option value="">Loading datasets…</option>
                 </select>
                 <!-- Date range filter -->
-                <div id="dashboard-date-filter" class="hidden items-center gap-2">
+                <div id="dashboard-date-filter" class="hidden items-center flex-wrap gap-2">
                   <span class="text-xs text-slate-400">From</span>
                   <input id="dash-date-from" type="date" class="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
                   <span class="text-xs text-slate-400">To</span>
                   <input id="dash-date-to" type="date" class="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
+                  <span id="dash-date-hint" class="text-xs text-slate-400 italic"></span>
                   <button type="button" id="dash-date-clear" class="rounded-lg px-2 py-1.5 text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400">✕ Clear</button>
                 </div>
-                <button type="button" id="dash-date-toggle" class="hidden rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
-                  <svg class="inline h-3.5 w-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                <button type="button" id="dash-date-toggle" class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                  <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
                   Filter by date
+                  <span id="dash-filter-active" class="hidden ml-0.5 h-1.5 w-1.5 rounded-full bg-indigo-500"></span>
                 </button>
               </div>
               <div class="flex items-center gap-2">
@@ -584,6 +595,17 @@
                 <li><span class="font-medium text-slate-700 dark:text-slate-300">Traffic Spike</span> — Warning when the last recorded hour is 2× the dataset average; Critical at 3×.</li>
               </ul>
             </div>
+
+            <!-- Triggered alert history (all datasets) -->
+            <div class="card-lift rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900/60">
+              <div class="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+                <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Triggered Alerts — All Datasets</h3>
+                <button type="button" id="alerts-history-refresh" class="text-xs text-indigo-600 hover:underline dark:text-indigo-400">Refresh</button>
+              </div>
+              <div id="alerts-history-wrap">
+                <p class="px-5 py-6 text-center text-sm text-slate-400">No alerts recorded yet.</p>
+              </div>
+            </div>
           </section>
 
           <!-- ============================================================ -->
@@ -815,7 +837,7 @@
                 Entries per batch
                 <input id="simulate-count" type="number" min="1" max="50" value="10" class="w-20 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
               </label>
-              <div class="flex items-center gap-2">
+              <div class="flex flex-wrap items-center gap-2">
                 <button type="button" id="simulate-once" class="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:bg-indigo-500">
                   <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
                   Generate Once
@@ -823,6 +845,19 @@
                 <button type="button" id="simulate-auto" class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
                   <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                   Auto (every 3s)
+                </button>
+                <div class="h-5 w-px bg-slate-200 dark:bg-slate-700 mx-1"></div>
+                <button type="button" id="simulate-error-spike" class="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100 dark:border-red-800/50 dark:bg-red-950/30 dark:text-red-300" title="Inject mostly 4xx/5xx entries to trigger an error-rate alert">
+                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                  Spike Errors
+                </button>
+                <button type="button" id="simulate-traffic-spike" class="inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-700 transition hover:bg-amber-100 dark:border-amber-800/50 dark:bg-amber-950/30 dark:text-amber-300" title="Inject a burst of requests to trigger a traffic-spike alert">
+                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>
+                  Spike Traffic
+                </button>
+                <button type="button" id="simulate-download" class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300" title="Download all simulated entries for this dataset as CSV">
+                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                  Download CSV
                 </button>
               </div>
             </div>
@@ -852,6 +887,84 @@
             </div>
           </section>
 
+          <!-- ============================================================ -->
+          <!-- User Management (Admin only)                                 -->
+          <!-- ============================================================ -->
+          <section data-view="users" class="hidden space-y-6">
+            <p class="text-sm text-slate-600 dark:text-slate-400">Manage user accounts and assign roles. New users must be invited — they cannot self-register.</p>
+
+            <!-- Invite form -->
+            <div id="users-invite-wrap" class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
+              <h3 class="mb-4 text-sm font-semibold text-slate-800 dark:text-slate-200">Invite a new user</h3>
+              <div class="flex flex-wrap items-end gap-3">
+                <label class="block flex-1 min-w-48">
+                  <span class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Email address</span>
+                  <input id="invite-email" type="email" placeholder="colleague@example.com"
+                    class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
+                </label>
+                <label class="block">
+                  <span class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Role</span>
+                  <select id="invite-role" class="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
+                    <option value="analyst">Analyst</option>
+                    <option value="viewer">Viewer</option>
+                  </select>
+                </label>
+                <button type="button" id="invite-send" class="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:bg-indigo-500">
+                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
+                  Send Invite
+                </button>
+              </div>
+              <div id="invite-msg" class="hidden"></div>
+              <p id="invite-err" class="mt-2 hidden text-xs text-red-600 dark:text-red-400"></p>
+            </div>
+
+            <!-- Pending invites -->
+            <div id="invites-wrap" class="hidden card-lift rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900/60">
+              <div class="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+                <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Pending Invites</h3>
+              </div>
+              <div id="invites-list" class="divide-y divide-slate-100 dark:divide-slate-800"></div>
+            </div>
+
+            <!-- Role legend -->
+            <div class="flex flex-wrap gap-3">
+              <span class="inline-flex items-center gap-1.5 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700 dark:border-indigo-800/40 dark:bg-indigo-950/20 dark:text-indigo-300">Admin — full access</span>
+              <span class="inline-flex items-center gap-1.5 rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-xs font-medium text-cyan-700 dark:border-cyan-800/40 dark:bg-cyan-950/20 dark:text-cyan-300">Analyst — upload &amp; analyse own data</span>
+              <span class="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-600 dark:border-slate-700 dark:bg-slate-800/40 dark:text-slate-300">Viewer — read-only dashboards</span>
+              <span class="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700 dark:border-amber-800/40 dark:bg-amber-950/20 dark:text-amber-300">Pending — awaiting role assignment</span>
+            </div>
+
+            <!-- Users table -->
+            <div class="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900/60">
+              <div class="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+                <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">All Users</h3>
+                <button type="button" id="users-refresh" class="text-xs text-indigo-600 hover:underline dark:text-indigo-400">Refresh</button>
+              </div>
+              <div class="log-scroll overflow-x-auto">
+                <table class="min-w-full text-left text-sm">
+                  <thead class="border-b border-slate-200 bg-slate-50/80 dark:border-slate-800 dark:bg-slate-800/30">
+                    <tr>
+                      <th class="whitespace-nowrap px-5 py-3 font-semibold text-slate-700 dark:text-slate-300">User</th>
+                      <th class="whitespace-nowrap px-5 py-3 font-semibold text-slate-700 dark:text-slate-300">Email</th>
+                      <th class="whitespace-nowrap px-5 py-3 font-semibold text-slate-700 dark:text-slate-300">Joined</th>
+                      <th class="whitespace-nowrap px-5 py-3 font-semibold text-slate-700 dark:text-slate-300">Role</th>
+                      <th class="whitespace-nowrap px-5 py-3 font-semibold text-slate-700 dark:text-slate-300">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody id="users-body" class="divide-y divide-slate-100 dark:divide-slate-800">
+                    <tr><td colspan="5" class="px-5 py-8 text-center text-sm text-slate-400">Loading…</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Non-admin fallback -->
+            <div id="users-no-access" class="hidden rounded-2xl border border-amber-200/80 bg-amber-50 px-5 py-8 text-center dark:border-amber-800/30 dark:bg-amber-950/20">
+              <p class="text-sm font-medium text-amber-700 dark:text-amber-300">You need the Admin role to manage users.</p>
+              <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">Contact your system administrator to request elevated access.</p>
+            </div>
+          </section>
+
         </main>
 
         <footer class="border-t border-slate-200/80 px-6 py-4 text-center text-xs text-slate-500 dark:border-slate-800 dark:text-slate-500">
@@ -866,8 +979,8 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-    <script src="js/api.js?v=20260523-v4"></script>
-    <script src="js/charts.js?v=20260523-v4"></script>
-    <script src="js/app.js?v=20260523-v4"></script>
+    <script src="js/api.js?v=20260528-v2"></script>
+    <script src="js/charts.js?v=20260528-v2"></script>
+    <script src="js/app.js?v=20260528-v2"></script>
   </body>
 </html>

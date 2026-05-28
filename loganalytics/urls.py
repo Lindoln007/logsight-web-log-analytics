@@ -12,7 +12,13 @@ FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
 
 def serve_frontend_index(request):
-    return render(request, "logs/app_shell.html")
+    from logs.services.rbac import get_or_create_profile
+    try:
+        profile = get_or_create_profile(request.user)
+        user_role = profile.role
+    except Exception:
+        user_role = "pending"
+    return render(request, "logs/app_shell.html", {"user_role": user_role})
 
 
 urlpatterns = [

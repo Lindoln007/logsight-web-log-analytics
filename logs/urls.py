@@ -197,6 +197,26 @@ urlpatterns = [
         views.simulate_logs_view,
         name="simulate-logs",
     ),
+    path(
+        "datasets/<int:dataset_id>/simulate/error-spike/",
+        views.simulate_error_spike_view,
+        name="simulate-error-spike",
+    ),
+    path(
+        "datasets/<int:dataset_id>/simulate/traffic-spike/",
+        views.simulate_traffic_spike_view,
+        name="simulate-traffic-spike",
+    ),
+    path(
+        "datasets/<int:dataset_id>/simulate/download/",
+        views.simulate_download_view,
+        name="simulate-download",
+    ),
+    path(
+        "alerts/all-history/",
+        views.all_alerts_history_view,
+        name="alerts-all-history",
+    ),
 
     # ------------------------------------------------------------------
     # RBAC admin  (Module 7)
@@ -210,5 +230,19 @@ urlpatterns = [
         "admin/users/<int:user_id>/role/",
         views.assign_role_view,
         name="admin-assign-role",
+    ),
+
+    # ------------------------------------------------------------------
+    # Invite tokens
+    # ------------------------------------------------------------------
+    path(
+        "invites/",
+        views.invites_view,
+        name="invites",
+    ),
+    path(
+        "invites/<int:invite_id>/revoke/",
+        views.revoke_invite_view,
+        name="invite-revoke",
     ),
 ]

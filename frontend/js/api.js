@@ -28,6 +28,19 @@
   const existingConfig = global.LogSightConfig || {};
   const apiConfig = existingConfig.api || {};
 
+  /**
+   * Build a date-range query-string fragment from an opts object.
+   * opts = { dateFrom: "YYYY-MM-DD", dateTo: "YYYY-MM-DD" }
+   * alreadyHasQs = true when the URL already contains a "?" character.
+   */
+  function _dateQs(opts, alreadyHasQs) {
+    var parts = [];
+    if (opts && opts.dateFrom) parts.push("date_from=" + encodeURIComponent(opts.dateFrom));
+    if (opts && opts.dateTo)   parts.push("date_to="   + encodeURIComponent(opts.dateTo));
+    if (!parts.length) return "";
+    return (alreadyHasQs ? "&" : "?") + parts.join("&");
+  }
+
   /** Build a dataset-scoped analytics URL from the path suffix. */
   function analyticsUrl(datasetId, suffix) {
     return (
@@ -420,13 +433,11 @@
       if (!id) return emptyRequestFrequency();
 
       var interval = (params && params.interval) || "hour";
-      var limit = (params && params.limit) || 168;
-      var url =
-        analyticsUrl(id, "request-trends") +
-        "?interval=" +
-        encodeURIComponent(interval) +
-        "&limit=" +
-        encodeURIComponent(limit);
+      var limit    = (params && params.limit)    || 168;
+      var url = analyticsUrl(id, "request-trends") +
+        "?interval=" + encodeURIComponent(interval) +
+        "&limit="    + encodeURIComponent(limit) +
+        _dateQs(params, true);
 
       var result = await fetchJson(url, { method: "GET" });
       if (!result.ok || !result.data || !Array.isArray(result.data.data)) {
@@ -455,11 +466,12 @@
      * Return status-code distribution shaped for Chart.js doughnut charts.
      * by_category keys (2xx, 3xx, 4xx, 5xx) become chart labels.
      */
-    async getStatusDistribution(datasetId) {
+    async getStatusDistribution(datasetId, opts) {
       var id = datasetId || _currentDatasetId;
       if (!id) return emptyStatusDistribution();
 
-      var result = await fetchJson(analyticsUrl(id, "status-distribution"), { method: "GET" });
+      var url = analyticsUrl(id, "status-distribution") + _dateQs(opts);
+      var result = await fetchJson(url, { method: "GET" });
       if (!result.ok || !result.data) return emptyStatusDistribution();
 
       var categories = result.data.by_category || {};
@@ -486,12 +498,12 @@
      * items[].value  — request count
      * items[].percentage — share of total traffic
      */
-    async getTopEndpoints(datasetId, limit) {
+    async getTopEndpoints(datasetId, limit, opts) {
       var id = datasetId || _currentDatasetId;
       if (!id) return emptyTopEndpoints();
 
-      var n = limit || 10;
-      var url = analyticsUrl(id, "top-endpoints") + "?limit=" + encodeURIComponent(n);
+      var n   = limit || 10;
+      var url = analyticsUrl(id, "top-endpoints") + "?limit=" + encodeURIComponent(n) + _dateQs(opts, true);
       var result = await fetchJson(url, { method: "GET" });
       if (!result.ok || !result.data) return emptyTopEndpoints();
 
@@ -513,11 +525,12 @@
      * Return hourly traffic pattern shaped for Chart.js area/bar charts.
      * 24 labels (0:00 – 23:00) with corresponding request counts.
      */
-    async getTrafficPattern(datasetId) {
+    async getTrafficPattern(datasetId, opts) {
       var id = datasetId || _currentDatasetId;
       if (!id) return emptyTrafficPattern();
 
-      var result = await fetchJson(analyticsUrl(id, "hourly-traffic"), { method: "GET" });
+      var url = analyticsUrl(id, "hourly-traffic") + _dateQs(opts);
+      var result = await fetchJson(url, { method: "GET" });
       if (!result.ok || !result.data || !Array.isArray(result.data.traffic)) {
         return emptyTrafficPattern();
       }
@@ -785,6 +798,41 @@
       return result.data;
     },
 
+    async simulateErrorSpike(datasetId) {
+      var id = datasetId || _currentDatasetId;
+      if (!id) throw new Error("No dataset selected.");
+      var result = await fetchJson(
+        "/logs/datasets/" + encodeURIComponent(id) + "/simulate/error-spike/",
+        { method: "POST" }
+      );
+      if (!result.ok) throw new Error("Error spike simulation failed.");
+      return result.data;
+    },
+
+    async simulateTrafficSpike(datasetId) {
+      var id = datasetId || _currentDatasetId;
+      if (!id) throw new Error("No dataset selected.");
+      var result = await fetchJson(
+        "/logs/datasets/" + encodeURIComponent(id) + "/simulate/traffic-spike/",
+        { method: "POST" }
+      );
+      if (!result.ok) throw new Error("Traffic spike simulation failed.");
+      return result.data;
+    },
+
+    simulateDownload(datasetId) {
+      var id = datasetId || _currentDatasetId;
+      if (!id) return;
+      window.location.href = "/logs/datasets/" + encodeURIComponent(id) + "/simulate/download/";
+    },
+
+    async getAllAlertsHistory(limit) {
+      var qs = limit ? "?limit=" + limit : "";
+      var result = await fetchJson("/logs/alerts/all-history/" + qs);
+      if (!result.ok) throw new Error("Failed to load alert history.");
+      return result.data;
+    },
+
     // ---- RBAC ---------------------------------------------------------------
 
     async getUsers() {
@@ -799,6 +847,30 @@
         { method: "POST", body: JSON.stringify({ role: role }) }
       );
       if (!result.ok) throw new Error("Role assignment failed.");
+      return result.data;
+    },
+
+    async createInvite(email, role) {
+      var result = await fetchJson("/logs/invites/", {
+        method: "POST",
+        body: JSON.stringify({ email: email, role: role }),
+      });
+      if (!result.ok) throw new Error((result.data && result.data.error) || "Failed to send invite.");
+      return result.data;
+    },
+
+    async listInvites() {
+      var result = await fetchJson("/logs/invites/");
+      if (!result.ok) throw new Error("Failed to load invites.");
+      return result.data;
+    },
+
+    async revokeInvite(inviteId) {
+      var result = await fetchJson(
+        "/logs/invites/" + encodeURIComponent(inviteId) + "/revoke/",
+        { method: "POST" }
+      );
+      if (!result.ok) throw new Error("Failed to revoke invite.");
       return result.data;
     },
 

@@ -143,43 +143,30 @@ def get_summary_metrics(dataset_id: int, owner: User) -> dict[str, Any]:
     return result
 
 
-def get_status_distribution(dataset_id: int, owner: User) -> dict[str, Any]:
+def get_status_distribution(
+    dataset_id: int,
+    owner: User,
+    date_from=None,
+    date_to=None,
+) -> dict[str, Any]:
     """
     Return request counts grouped by HTTP status code.
-
-    Uses the ``(dataset, status_code)`` compound index for an efficient
-    index-only scan.
-
-    Return shape::
-
-        {
-            "dataset_id": int,
-            "by_code": [
-                {"status_code": 200, "count": 91234, "category": "2xx"},
-                ...
-            ],
-            "by_category": {
-                "1xx": 0,
-                "2xx": 91234,
-                "3xx": 512,
-                "4xx": 3021,
-                "5xx": 87,
-                "other": 0,
-            },
-        }
+    When date_from/date_to are provided the cache is bypassed.
     """
-    cache_key = _CK_STATUS.format(dataset_id=dataset_id)
-    cached = cache.get(cache_key)
-    if cached is not None:
-        return cached
+    use_cache = date_from is None and date_to is None
+    if use_cache:
+        cache_key = _CK_STATUS.format(dataset_id=dataset_id)
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
 
-    qs = (
-        LogEntry.objects
-        .filter(dataset_id=dataset_id, dataset__owner=owner)
-        .values("status_code")
-        .annotate(count=Count("id"))
-        .order_by("status_code")
-    )
+    qs = LogEntry.objects.filter(dataset_id=dataset_id, dataset__owner=owner)
+    if date_from is not None:
+        qs = qs.filter(timestamp__gte=date_from)
+    if date_to is not None:
+        qs = qs.filter(timestamp__lte=date_to)
+
+    qs = qs.values("status_code").annotate(count=Count("id")).order_by("status_code")
 
     category_counts: dict[str, int] = {
         "1xx": 0, "2xx": 0, "3xx": 0, "4xx": 0, "5xx": 0, "other": 0,
@@ -198,7 +185,8 @@ def get_status_distribution(dataset_id: int, owner: User) -> dict[str, Any]:
         "by_code": by_code,
         "by_category": category_counts,
     }
-    cache.set(cache_key, result, ANALYTICS_CACHE_TTL)
+    if use_cache:
+        cache.set(cache_key, result, ANALYTICS_CACHE_TTL)
     return result
 
 
@@ -207,6 +195,8 @@ def get_request_trends(
     owner: User,
     interval: str = "hour",
     limit: int = DEFAULT_TRENDS_LIMIT,
+    date_from=None,
+    date_to=None,
 ) -> dict[str, Any]:
     """
     Return request counts bucketed into time intervals for time-series charting.
@@ -235,19 +225,23 @@ def get_request_trends(
         interval = "hour"
     limit = max(1, min(limit, 1000))
 
-    cache_key = _CK_TRENDS.format(dataset_id=dataset_id, interval=interval)
-    cached = cache.get(cache_key)
-    if cached is not None:
-        return cached
+    use_cache = date_from is None and date_to is None
+    if use_cache:
+        cache_key = _CK_TRENDS.format(dataset_id=dataset_id, interval=interval)
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
 
     trunc_fn = TruncHour if interval == "hour" else TruncDay
 
-    # ORDER BY DESC + LIMIT pushes work to the DB; we re-sort ascending in Python
-    # after slicing so charts receive chronological order.
+    qs = LogEntry.objects.filter(dataset_id=dataset_id, dataset__owner=owner)
+    if date_from is not None:
+        qs = qs.filter(timestamp__gte=date_from)
+    if date_to is not None:
+        qs = qs.filter(timestamp__lte=date_to)
+
     qs = (
-        LogEntry.objects
-        .filter(dataset_id=dataset_id, dataset__owner=owner)
-        .annotate(bucket=trunc_fn("timestamp"))
+        qs.annotate(bucket=trunc_fn("timestamp"))
         .values("bucket")
         .annotate(count=Count("id"))
         .order_by("-bucket")[:limit]
@@ -270,7 +264,8 @@ def get_request_trends(
         "total_buckets": len(data),
         "data": data,
     }
-    cache.set(cache_key, result, ANALYTICS_CACHE_TTL)
+    if use_cache:
+        cache.set(cache_key, result, ANALYTICS_CACHE_TTL)
     return result
 
 
@@ -278,6 +273,8 @@ def get_top_endpoints(
     dataset_id: int,
     owner: User,
     limit: int = DEFAULT_TOP_ENDPOINTS_LIMIT,
+    date_from=None,
+    date_to=None,
 ) -> dict[str, Any]:
     """
     Return the most frequently accessed endpoints ranked by request count.
@@ -302,29 +299,27 @@ def get_top_endpoints(
     """
     limit = min(max(1, limit), MAX_TOP_ENDPOINTS_LIMIT)
 
-    cache_key = _CK_ENDPOINTS.format(dataset_id=dataset_id, limit=limit)
-    cached = cache.get(cache_key)
-    if cached is not None:
-        return cached
+    use_cache = date_from is None and date_to is None
+    if use_cache:
+        cache_key = _CK_ENDPOINTS.format(dataset_id=dataset_id, limit=limit)
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
 
-    agg = (
-        LogEntry.objects
-        .filter(dataset_id=dataset_id, dataset__owner=owner)
-        .aggregate(
-            total=Count("id"),
-            unique_endpoints=Count("endpoint", distinct=True),
-        )
+    base_qs = LogEntry.objects.filter(dataset_id=dataset_id, dataset__owner=owner)
+    if date_from is not None:
+        base_qs = base_qs.filter(timestamp__gte=date_from)
+    if date_to is not None:
+        base_qs = base_qs.filter(timestamp__lte=date_to)
+
+    agg = base_qs.aggregate(
+        total=Count("id"),
+        unique_endpoints=Count("endpoint", distinct=True),
     )
     total: int = agg["total"] or 0
     unique_endpoint_count: int = agg["unique_endpoints"] or 0
 
-    qs = (
-        LogEntry.objects
-        .filter(dataset_id=dataset_id, dataset__owner=owner)
-        .values("endpoint")
-        .annotate(count=Count("id"))
-        .order_by("-count")[:limit]
-    )
+    qs = base_qs.values("endpoint").annotate(count=Count("id")).order_by("-count")[:limit]
 
     endpoints = [
         {
@@ -340,11 +335,12 @@ def get_top_endpoints(
         "total_unique_endpoints": unique_endpoint_count,
         "endpoints": endpoints,
     }
-    cache.set(cache_key, result, ANALYTICS_CACHE_TTL)
+    if use_cache:
+        cache.set(cache_key, result, ANALYTICS_CACHE_TTL)
     return result
 
 
-def get_hourly_traffic(dataset_id: int, owner: User) -> dict[str, Any]:
+def get_hourly_traffic(dataset_id: int, owner: User, date_from=None, date_to=None) -> dict[str, Any]:
     """
     Return request counts distributed across the 24 hours of the day.
 
@@ -366,15 +362,21 @@ def get_hourly_traffic(dataset_id: int, owner: User) -> dict[str, Any]:
             ],
         }
     """
-    cache_key = _CK_HOURLY.format(dataset_id=dataset_id)
-    cached = cache.get(cache_key)
-    if cached is not None:
-        return cached
+    use_cache = date_from is None and date_to is None
+    if use_cache:
+        cache_key = _CK_HOURLY.format(dataset_id=dataset_id)
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+    qs = LogEntry.objects.filter(dataset_id=dataset_id, dataset__owner=owner)
+    if date_from is not None:
+        qs = qs.filter(timestamp__gte=date_from)
+    if date_to is not None:
+        qs = qs.filter(timestamp__lte=date_to)
 
     qs = (
-        LogEntry.objects
-        .filter(dataset_id=dataset_id, dataset__owner=owner)
-        .annotate(hour=ExtractHour("timestamp"))
+        qs.annotate(hour=ExtractHour("timestamp"))
         .values("hour")
         .annotate(count=Count("id"))
         .order_by("hour")
@@ -397,7 +399,8 @@ def get_hourly_traffic(dataset_id: int, owner: User) -> dict[str, Any]:
         "quiet_hour": quiet_hour,
         "traffic": traffic,
     }
-    cache.set(cache_key, result, ANALYTICS_CACHE_TTL)
+    if use_cache:
+        cache.set(cache_key, result, ANALYTICS_CACHE_TTL)
     return result
 
 

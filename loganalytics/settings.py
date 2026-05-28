@@ -159,6 +159,28 @@ LOGIN_REDIRECT_URL = 'app-shell'
 LOGOUT_REDIRECT_URL = 'accounts:login'
 
 # ---------------------------------------------------------------------------
+# Email
+# ---------------------------------------------------------------------------
+# Development: emails are printed to the console (runserver terminal).
+# Production: swap EMAIL_BACKEND for an SMTP backend and set the vars below.
+# Use Gmail SMTP when GMAIL_APP_PASSWORD is set in .env; otherwise fall back
+# to the console backend so development works without credentials.
+_gmail_password = os.getenv('GMAIL_APP_PASSWORD', '')
+if _gmail_password:
+    EMAIL_BACKEND   = 'django.core.mail.backends.smtp.EmailBackend'
+    EMAIL_HOST      = 'smtp.gmail.com'
+    EMAIL_PORT      = 587
+    EMAIL_USE_TLS   = True
+    EMAIL_HOST_USER = os.getenv('GMAIL_ADDRESS', 'mbayaasante@gmail.com')
+    EMAIL_HOST_PASSWORD = _gmail_password
+else:
+    # No credentials — emails print to the runserver terminal instead.
+    EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+
+DEFAULT_FROM_EMAIL   = 'LogSight Alerts <noreply@logsight.local>'
+LOGSIGHT_ALERT_EMAIL = os.getenv('LOGSIGHT_ALERT_EMAIL', 'mbayaasante@gmail.com')
+
+# ---------------------------------------------------------------------------
 # Upload limits
 # ---------------------------------------------------------------------------
 # Maximum size (bytes) accepted for uploaded log files.  Validated in

@@ -8,7 +8,7 @@
   var PREFS_KEY    = "log-sight-prefs";           // localStorage fallback for preferences
   var routes       = ["dashboard", "upload", "datasets", "viewer",
                       "forecast", "anomalies", "alerts", "reports",
-                      "security", "compare", "search", "simulate"];
+                      "security", "compare", "search", "simulate", "users"];
 
   var viewerPage             = 1;
   var viewerSearchDebounce;
@@ -195,6 +195,7 @@
     if (["upload", "datasets", "viewer"].indexOf(route) >= 0) section = "data";
     if (["forecast", "anomalies", "reports", "compare", "search"].indexOf(route) >= 0) section = "analytics";
     if (["alerts", "security", "simulate"].indexOf(route) >= 0) section = "monitoring";
+    if (route === "users") section = "admin";
     $all("[data-nav-section]").forEach(function (group) {
       var active = group.getAttribute("data-nav-section") === section;
       var trigger = $(".top-nav-link", group);
@@ -228,6 +229,7 @@
       compare:   "Dataset Comparison",
       search:    "Advanced Search",
       simulate:  "Live Ingestion",
+      users:     "User Management",
     };
     var titleEl = $("#page-title");
     if (titleEl) titleEl.textContent = titles[route] || "Dashboard";
@@ -249,6 +251,7 @@
     if (route === "compare")    initCompareView();
     if (route === "search")     initSearchView();
     if (route === "simulate")   initSimulateView();
+    if (route === "users")      initUsersView();
   }
 
   function navigate(route) { setHashRoute(route); }
@@ -377,6 +380,9 @@
     await populateDashboardSelect();
     var id = LogSightAPI.getCurrentDataset();
 
+    // Constrain the date pickers to the selected dataset's actual range.
+    if (id) await setDashboardDateConstraints(id);
+
     if (!id) {
       renderStatValue("stat-requests", null, "", "No datasets");
       renderStatValue("stat-errors",   null, "", "—");
@@ -386,28 +392,53 @@
       return;
     }
 
-    var summary = await LogSightAPI.getDashboardSummary(id);
+    var filter    = getDashboardDateFilter();
+    var isFiltered = !!(filter.dateFrom || filter.dateTo);
 
-    renderStatValue("stat-requests", summary.totalRequests != null ? formatNumber(summary.totalRequests) : null, "", "No data");
-    renderStatValue("stat-errors",   summary.errorRate    != null ? Number(summary.errorRate).toFixed(2) : null, "%", "No data");
-    renderStatValue("stat-latency",  summary.avgResponseSize != null ? formatNumber(summary.avgResponseSize) : null, " B", "No data");
-    renderStatValue("stat-visitors", summary.uniqueVisitors != null ? formatNumber(summary.uniqueVisitors) : null, "", "No data");
+    var summary;
+    if (isFiltered) {
+      var raw = await LogSightAPI.getFilteredSummary(id, filter.dateFrom, filter.dateTo);
+      summary = {
+        totalRequests:   raw.total_requests,
+        errorRate:       raw.error_rate,
+        avgResponseSize: raw.avg_response_size,
+        uniqueVisitors:  raw.unique_visitors,
+        totalErrors:     raw.total_errors,
+      };
+    } else {
+      summary = await LogSightAPI.getDashboardSummary(id);
+    }
+
+    renderStatValue("stat-requests", summary.totalRequests  != null ? formatNumber(summary.totalRequests)                    : null, "", "No data");
+    renderStatValue("stat-errors",   summary.errorRate      != null ? Number(summary.errorRate).toFixed(2)                   : null, "%", "No data");
+    renderStatValue("stat-latency",  summary.avgResponseSize != null ? formatNumber(summary.avgResponseSize)                 : null, " B", "No data");
+    renderStatValue("stat-visitors", summary.uniqueVisitors != null ? formatNumber(summary.uniqueVisitors)                   : null, "", "No data");
 
     if (summary.totalErrors != null) renderSubText("stat-errors-abs", formatNumber(summary.totalErrors));
 
-    loadDashboardCharts(id);
+    // Show or clear the active-filter indicator in the sub-text of the requests tile.
+    var reqSub = $("#stat-requests-sub");
+    if (reqSub) {
+      reqSub.textContent = isFiltered
+        ? (filter.dateFrom || "…") + " → " + (filter.dateTo || "…")
+        : "Select a dataset above";
+    }
+
+    loadDashboardCharts(id, filter);
   }
 
-  async function loadDashboardCharts(datasetId) {
+  async function loadDashboardCharts(datasetId, filter) {
     var id = datasetId || LogSightAPI.getCurrentDataset();
     LogSightCharts.destroyAll();
     if (!id) return;
 
+    var opts = filter || {};
+
     var results = await Promise.all([
-      LogSightAPI.getRequestFrequency(id),
-      LogSightAPI.getStatusDistribution(id),
-      LogSightAPI.getTopEndpoints(id),
-      LogSightAPI.getTrafficPattern(id),
+      LogSightAPI.getRequestFrequency(id, { interval: "hour", limit: 168, dateFrom: opts.dateFrom, dateTo: opts.dateTo }),
+      LogSightAPI.getStatusDistribution(id, opts),
+      LogSightAPI.getTopEndpoints(id, 10, opts),
+      LogSightAPI.getTrafficPattern(id, opts),
     ]);
 
     requestAnimationFrame(function () {
@@ -438,12 +469,64 @@
     } catch (_) {}
   }
 
+  // Stores the currently-active dataset date bounds so the change listeners
+  // can clamp values without re-fetching.
+  var _dashDateMin = "";
+  var _dashDateMax = "";
+
+  async function setDashboardDateConstraints(datasetId) {
+    var fromIn = $("#dash-date-from");
+    var toIn   = $("#dash-date-to");
+    var hint   = $("#dash-date-hint");
+
+    if (!fromIn || !toIn) return;
+
+    if (!datasetId) {
+      _dashDateMin = ""; _dashDateMax = "";
+      fromIn.min = ""; fromIn.max = ""; fromIn.value = "";
+      toIn.min   = ""; toIn.max   = ""; toIn.value   = "";
+      if (hint) hint.textContent = "";
+      return;
+    }
+
+    try {
+      var result = await fetch(
+        "/logs/datasets/" + encodeURIComponent(datasetId) + "/analytics/summary/",
+        { credentials: "same-origin" }
+      );
+      if (!result.ok) return;
+      var data = await result.json();
+      var dr   = data.date_range || {};
+      if (!dr.start || !dr.end) return;
+
+      // ISO → YYYY-MM-DD (works for both offset-aware and naive timestamps).
+      var minDate = dr.start.slice(0, 10);
+      var maxDate = dr.end.slice(0, 10);
+
+      _dashDateMin = minDate;
+      _dashDateMax = maxDate;
+
+      // Set HTML min/max — visually constrains Chrome/Edge calendar pickers.
+      fromIn.min = minDate; fromIn.max = maxDate;
+      toIn.min   = minDate; toIn.max   = maxDate;
+
+      // Show the allowed range as text so every browser makes it obvious.
+      if (hint) hint.textContent = "(" + minDate + " – " + maxDate + ")";
+
+      // Clamp any already-set values that are now out of range.
+      if (fromIn.value && (fromIn.value < minDate || fromIn.value > maxDate)) fromIn.value = "";
+      if (toIn.value   && (toIn.value   < minDate || toIn.value   > maxDate)) toIn.value   = "";
+
+    } catch (_) {}
+  }
+
   function initDashboardControls() {
     var select = $("#dashboard-dataset");
     if (select && !select._bound) {
       select._bound = true;
       select.addEventListener("change", function () {
         LogSightAPI.setCurrentDataset(select.value || null);
+        setDashboardDateConstraints(select.value || null);
         loadDashboardData();
       });
     }
@@ -1115,6 +1198,11 @@
         checkBtn._bound = true;
         checkBtn.addEventListener("click", runAutoCheck);
       }
+      var refreshBtn = $("#alerts-history-refresh");
+      if (refreshBtn && !refreshBtn._bound) {
+        refreshBtn._bound = true;
+        refreshBtn.addEventListener("click", loadAllAlertsHistory);
+      }
     }
 
     await populateSelect("alerts-dataset");
@@ -1123,12 +1211,63 @@
     if (dsSel && !dsSel._alertsBound) {
       dsSel._alertsBound = true;
       dsSel.addEventListener("change", function () {
-        // Clear previous results when dataset changes.
         var banner  = $("#alerts-status-banner");
         var results = $("#alerts-results");
         if (banner)  banner.classList.add("hidden");
         if (results) results.classList.add("hidden");
       });
+    }
+
+    loadAllAlertsHistory();
+  }
+
+  async function loadAllAlertsHistory() {
+    var wrap = $("#alerts-history-wrap");
+    if (!wrap) return;
+    wrap.innerHTML = '<p class="px-5 py-4 text-center text-xs text-slate-400">Loading…</p>';
+    try {
+      var data    = await LogSightAPI.getAllAlertsHistory(100);
+      var alerts  = data.alerts || [];
+      if (!alerts.length) {
+        wrap.innerHTML = '<p class="px-5 py-6 text-center text-sm text-slate-400">No alerts recorded yet. Run a health check or use the simulator\'s Spike buttons.</p>';
+        return;
+      }
+      wrap.innerHTML = "";
+      var table = document.createElement("div");
+      table.className = "overflow-x-auto";
+      var html = '<table class="min-w-full text-sm">' +
+        '<thead class="border-b border-slate-100 bg-slate-50/60 dark:border-slate-800 dark:bg-slate-800/20">' +
+        '<tr>' +
+        '<th class="px-5 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">Time</th>' +
+        '<th class="px-5 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">Dataset</th>' +
+        '<th class="px-5 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">Type</th>' +
+        '<th class="px-5 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">Severity</th>' +
+        '<th class="px-5 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">Message</th>' +
+        '</tr></thead>' +
+        '<tbody class="divide-y divide-slate-100 dark:divide-slate-800">';
+
+      alerts.forEach(function (a) {
+        var sevClass = a.severity === "high"
+          ? "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300"
+          : a.severity === "medium"
+          ? "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
+          : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300";
+        var typeLabel = a.alert_type === "error_rate" ? "Error Rate" : a.alert_type === "request_spike" ? "Traffic Spike" : a.alert_type;
+        html +=
+          '<tr class="hover:bg-slate-50/60 dark:hover:bg-slate-800/30">' +
+          '<td class="whitespace-nowrap px-5 py-3 text-xs text-slate-500 dark:text-slate-400">' + escapeHtml(formatDate(a.triggered_at)) + '</td>' +
+          '<td class="px-5 py-3 text-xs font-medium text-indigo-600 dark:text-indigo-400">' + escapeHtml(a.dataset_name || "—") + '</td>' +
+          '<td class="px-5 py-3 text-xs text-slate-600 dark:text-slate-400">' + escapeHtml(typeLabel) + '</td>' +
+          '<td class="px-5 py-3"><span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ' + sevClass + '">' + escapeHtml(a.severity) + '</span></td>' +
+          '<td class="max-w-sm truncate px-5 py-3 text-xs text-slate-600 dark:text-slate-400" title="' + escapeHtml(a.message) + '">' + escapeHtml(a.message) + '</td>' +
+          '</tr>';
+      });
+
+      html += '</tbody></table>';
+      table.innerHTML = html;
+      wrap.appendChild(table);
+    } catch (_) {
+      wrap.innerHTML = '<p class="px-5 py-4 text-sm text-red-500">Failed to load alert history.</p>';
     }
   }
 
@@ -1265,6 +1404,7 @@
   function initDashboardDateFilter() {
     var toggleBtn = $("#dash-date-toggle");
     var filterRow = $("#dashboard-date-filter");
+    var activeDot = $("#dash-filter-active");
     var clearBtn  = $("#dash-date-clear");
     var fromIn    = $("#dash-date-from");
     var toIn      = $("#dash-date-to");
@@ -1272,8 +1412,14 @@
     if (toggleBtn && !toggleBtn._bound) {
       toggleBtn._bound = true;
       toggleBtn.addEventListener("click", function () {
-        filterRow.classList.toggle("hidden");
-        filterRow.classList.toggle("flex");
+        var isOpen = !filterRow.classList.contains("hidden");
+        if (isOpen) {
+          filterRow.classList.add("hidden");
+          filterRow.classList.remove("flex");
+        } else {
+          filterRow.classList.remove("hidden");
+          filterRow.classList.add("flex");
+        }
       });
     }
     if (clearBtn && !clearBtn._bound) {
@@ -1283,16 +1429,40 @@
         if (toIn)   toIn.value   = "";
         filterRow.classList.add("hidden");
         filterRow.classList.remove("flex");
+        if (activeDot) activeDot.classList.add("hidden");
         loadDashboardData();
       });
     }
     if (fromIn && !fromIn._dboundFilter) {
       fromIn._dboundFilter = true;
-      fromIn.addEventListener("change", loadDashboardData);
+      fromIn.addEventListener("change", function () {
+        _clampDateInput(fromIn);
+        // From must not exceed To.
+        if (toIn && toIn.value && fromIn.value && fromIn.value > toIn.value) toIn.value = fromIn.value;
+        _updateFilterDot();
+        loadDashboardData();
+      });
     }
     if (toIn && !toIn._dboundFilter) {
       toIn._dboundFilter = true;
-      toIn.addEventListener("change", loadDashboardData);
+      toIn.addEventListener("change", function () {
+        _clampDateInput(toIn);
+        // To must not precede From.
+        if (fromIn && fromIn.value && toIn.value && toIn.value < fromIn.value) fromIn.value = toIn.value;
+        _updateFilterDot();
+        loadDashboardData();
+      });
+    }
+
+    function _clampDateInput(input) {
+      if (!input.value) return;
+      if (_dashDateMin && input.value < _dashDateMin) input.value = _dashDateMin;
+      if (_dashDateMax && input.value > _dashDateMax) input.value = _dashDateMax;
+    }
+
+    function _updateFilterDot() {
+      var active = !!(fromIn && fromIn.value) || !!(toIn && toIn.value);
+      if (activeDot) activeDot.classList.toggle("hidden", !active);
     }
   }
 
@@ -1731,8 +1901,12 @@
 
   async function initSimulateView() {
     await populateSelect("simulate-dataset");
-    var onceBtn = $("#simulate-once");
-    var autoBtn = $("#simulate-auto");
+    var onceBtn    = $("#simulate-once");
+    var autoBtn    = $("#simulate-auto");
+    var errBtn     = $("#simulate-error-spike");
+    var trafficBtn = $("#simulate-traffic-spike");
+    var dlBtn      = $("#simulate-download");
+
     if (onceBtn && !onceBtn._bound) {
       onceBtn._bound = true;
       onceBtn.addEventListener("click", function () { runSimulateBatch(false); });
@@ -1741,43 +1915,126 @@
       autoBtn._bound = true;
       autoBtn.addEventListener("click", toggleSimulateAuto);
     }
+    if (errBtn && !errBtn._bound) {
+      errBtn._bound = true;
+      errBtn.addEventListener("click", runErrorSpike);
+    }
+    if (trafficBtn && !trafficBtn._bound) {
+      trafficBtn._bound = true;
+      trafficBtn.addEventListener("click", runTrafficSpike);
+    }
+    if (dlBtn && !dlBtn._bound) {
+      dlBtn._bound = true;
+      dlBtn.addEventListener("click", function () {
+        var dsSel = $("#simulate-dataset");
+        if (!dsSel || !dsSel.value) { window.alert("Select a dataset first."); return; }
+        LogSightAPI.simulateDownload(dsSel.value);
+      });
+    }
+  }
+
+  async function runErrorSpike() {
+    var dsSel = $("#simulate-dataset");
+    if (!dsSel || !dsSel.value) { window.alert("Please select a target dataset first."); return; }
+    var btn = $("#simulate-error-spike");
+    if (btn) { btn.disabled = true; btn.textContent = "Injecting…"; }
+    try {
+      var data = await LogSightAPI.simulateErrorSpike(dsSel.value);
+      _applySimulateResult(data);
+      if (data.alert_status && data.alert_status !== "ok") {
+        _showSimulateAlertBadge(data.alert_status, data.alert_results || []);
+      }
+    } catch (err) {
+      window.alert(err.message || "Error spike failed.");
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg> Spike Errors';
+      }
+    }
+  }
+
+  async function runTrafficSpike() {
+    var dsSel = $("#simulate-dataset");
+    if (!dsSel || !dsSel.value) { window.alert("Please select a target dataset first."); return; }
+    var btn = $("#simulate-traffic-spike");
+    if (btn) { btn.disabled = true; btn.textContent = "Injecting…"; }
+    try {
+      var data = await LogSightAPI.simulateTrafficSpike(dsSel.value);
+      _applySimulateResult(data);
+      if (data.alert_status && data.alert_status !== "ok") {
+        _showSimulateAlertBadge(data.alert_status, data.alert_results || []);
+      }
+    } catch (err) {
+      window.alert(err.message || "Traffic spike failed.");
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg> Spike Traffic';
+      }
+    }
+  }
+
+  function _showSimulateAlertBadge(status, results) {
+    var statsEl  = $("#simulate-stats");
+    var statusEl = $("#simulate-status");
+    if (statusEl) {
+      var label = status === "critical" ? "⚠ CRITICAL ALERT" : "⚡ WARNING";
+      var cls   = status === "critical" ? "text-red-600 dark:text-red-400" : "text-amber-600 dark:text-amber-400";
+      statusEl.textContent  = label;
+      statusEl.className    = "mt-1 text-sm font-bold " + cls;
+    }
+    if (statsEl) { statsEl.classList.remove("hidden"); statsEl.classList.add("grid"); }
+    // Refresh notification badge count
+    pollNotifCount();
+  }
+
+  function _applySimulateResult(data) {
+    simulateTotalGenerated += data.generated || 0;
+    var totalEl  = $("#simulate-total");
+    var lastEl   = $("#simulate-last");
+    var statusEl = $("#simulate-status");
+    var statsEl  = $("#simulate-stats");
+    var feed     = $("#simulate-feed");
+
+    if (statsEl) { statsEl.classList.remove("hidden"); statsEl.classList.add("grid"); }
+    if (totalEl) totalEl.textContent = simulateTotalGenerated.toLocaleString();
+    if (lastEl)  lastEl.textContent  = (data.generated || 0) + " entries";
+    if (statusEl && !statusEl.className.includes("text-red") && !statusEl.className.includes("text-amber")) {
+      statusEl.textContent = simulateAutoTimer ? "● Streaming" : "Done";
+      statusEl.className   = "mt-1 text-sm font-semibold text-slate-900 dark:text-white";
+    }
+
+    if (feed && data.entries) {
+      if (feed.querySelector("p")) feed.innerHTML = "";
+      data.entries.slice(0, 10).forEach(function (e) {
+        var line = document.createElement("div");
+        var code = Number(e.status_code || 0);
+        var cls  = code >= 500 ? "text-red-500" : code >= 400 ? "text-amber-500" : "text-emerald-500";
+        line.className = "py-0.5 border-b border-slate-100/40 dark:border-slate-800/40";
+        line.innerHTML =
+          '<span class="text-slate-400">' + new Date(e.timestamp).toLocaleTimeString() + '</span> ' +
+          '<span class="' + cls + '">' + escapeHtml(String(e.status_code)) + '</span> ' +
+          escapeHtml(e.method) + ' ' + escapeHtml(e.endpoint) + ' — ' + escapeHtml(e.ip_address);
+        feed.insertBefore(line, feed.firstChild);
+        while (feed.children.length > 100) feed.removeChild(feed.lastChild);
+      });
+    }
+
+    // Refresh notification bell after every batch (alerts may have fired).
+    pollNotifCount();
   }
 
   async function runSimulateBatch(silent) {
-    var dsSel  = $("#simulate-dataset");
+    var dsSel   = $("#simulate-dataset");
     var countIn = $("#simulate-count");
     if (!dsSel || !dsSel.value) { if (!silent) window.alert("Please select a target dataset first."); return; }
     var count = Math.min(50, parseInt((countIn && countIn.value) || "10", 10) || 10);
-
     try {
       var data = await LogSightAPI.simulateLogs(dsSel.value, count);
-      simulateTotalGenerated += data.generated || 0;
-
-      var totalEl  = $("#simulate-total");
-      var lastEl   = $("#simulate-last");
-      var statusEl = $("#simulate-status");
-      var statsEl  = $("#simulate-stats");
-      var feed     = $("#simulate-feed");
-
-      if (statsEl) { statsEl.classList.remove("hidden"); statsEl.classList.add("grid"); }
-      if (totalEl)  totalEl.textContent  = simulateTotalGenerated.toLocaleString();
-      if (lastEl)   lastEl.textContent   = (data.generated || 0) + " entries";
-      if (statusEl) statusEl.textContent = simulateAutoTimer ? "● Streaming" : "Done";
-
-      if (feed && data.entries) {
-        if (feed.querySelector("p")) feed.innerHTML = "";
-        data.entries.slice(0, 10).forEach(function (e) {
-          var line = document.createElement("div");
-          var code = Number(e.status_code || 0);
-          var cls  = code >= 500 ? "text-red-500" : code >= 400 ? "text-amber-500" : "text-emerald-500";
-          line.className = "py-0.5 border-b border-slate-100/40 dark:border-slate-800/40";
-          line.innerHTML = '<span class="text-slate-400">' + new Date(e.timestamp).toLocaleTimeString() + '</span> ' +
-            '<span class="' + cls + '">' + escapeHtml(String(e.status_code)) + '</span> ' +
-            escapeHtml(e.method) + ' ' + escapeHtml(e.endpoint) + ' — ' + escapeHtml(e.ip_address);
-          feed.insertBefore(line, feed.firstChild);
-          // Keep feed trimmed to 100 lines.
-          while (feed.children.length > 100) feed.removeChild(feed.lastChild);
-        });
+      _applySimulateResult(data);
+      if (data.alert_status && data.alert_status !== "ok") {
+        _showSimulateAlertBadge(data.alert_status, []);
       }
     } catch (err) {
       if (!silent) window.alert(err.message || "Simulation failed.");
@@ -1886,9 +2143,277 @@
   // Boot
   // -------------------------------------------------------------------------
 
+  // -------------------------------------------------------------------------
+  // User Management (RBAC)
+  // -------------------------------------------------------------------------
+
+  var _currentUserRole = (typeof window !== "undefined" && window.LOGSIGHT_USER_ROLE) || "pending";
+
+  function initAdminNav() {
+    if (_currentUserRole === "admin") {
+      var adminGroup  = $("#nav-admin-group");
+      var mobileLabel = $("#mobile-admin-label");
+      var mobileLink  = $("#mobile-admin-users");
+      if (adminGroup)  adminGroup.classList.remove("hidden");
+      if (mobileLabel) mobileLabel.classList.remove("hidden");
+      if (mobileLink)  mobileLink.classList.remove("hidden");
+    }
+  }
+
+  async function initUsersView() {
+    var noAccess   = $("#users-no-access");
+    var inviteWrap = $("#users-invite-wrap");
+
+    if (_currentUserRole !== "admin") {
+      if (inviteWrap) inviteWrap.classList.add("hidden");
+      if (noAccess)   noAccess.classList.remove("hidden");
+      return;
+    }
+
+    var refreshBtn = $("#users-refresh");
+    if (refreshBtn && !refreshBtn._bound) {
+      refreshBtn._bound = true;
+      refreshBtn.addEventListener("click", function () { loadUsersTable(); loadInvitesList(); });
+    }
+
+    var sendBtn = $("#invite-send");
+    if (sendBtn && !sendBtn._bound) {
+      sendBtn._bound = true;
+      sendBtn.addEventListener("click", sendInvite);
+    }
+
+    loadUsersTable();
+    loadInvitesList();
+  }
+
+  function _buildInviteUrl(token) {
+    return window.location.origin + "/accounts/register/?invite=" + encodeURIComponent(token);
+  }
+
+  function _copyToClipboard(text, btn) {
+    navigator.clipboard.writeText(text).then(function () {
+      var original = btn.textContent;
+      btn.textContent = "Copied!";
+      btn.classList.add("text-emerald-600");
+      setTimeout(function () { btn.textContent = original; btn.classList.remove("text-emerald-600"); }, 2000);
+    }).catch(function () {
+      // Fallback for environments where clipboard API is restricted.
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.cssText = "position:fixed;opacity:0;";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      btn.textContent = "Copied!";
+      setTimeout(function () { btn.textContent = "Copy link"; }, 2000);
+    });
+  }
+
+  async function sendInvite() {
+    var emailIn  = $("#invite-email");
+    var roleIn   = $("#invite-role");
+    var msgArea  = $("#invite-msg");
+    var err      = $("#invite-err");
+    var btn      = $("#invite-send");
+
+    if (!emailIn || !emailIn.value.trim()) { window.alert("Enter an email address."); return; }
+
+    if (msgArea) msgArea.classList.add("hidden");
+    if (err)     err.classList.add("hidden");
+    if (btn)     { btn.disabled = true; btn.textContent = "Generating…"; }
+
+    try {
+      var data   = await LogSightAPI.createInvite(emailIn.value.trim(), roleIn ? roleIn.value : "analyst");
+      var invite = data.invite;
+      var url    = _buildInviteUrl(invite.token);
+
+      // Replace the message area with a copyable URL box.
+      if (msgArea) {
+        msgArea.className = "";  // clear any hidden class
+        msgArea.innerHTML =
+          '<div class="mt-3 rounded-xl border border-emerald-200 bg-emerald-50/80 p-3 dark:border-emerald-800/40 dark:bg-emerald-950/20">' +
+            '<p class="mb-2 text-xs font-semibold text-emerald-700 dark:text-emerald-300">Invite created for ' + escapeHtml(invite.email) + ' (' + escapeHtml(invite.role) + ')</p>' +
+            '<p class="mb-2 text-xs text-emerald-600 dark:text-emerald-400">Share this link with them — it expires in 7 days or after one use:</p>' +
+            '<div class="flex items-center gap-2">' +
+              '<input type="text" readonly value="' + escapeHtml(url) + '" ' +
+                'class="flex-1 min-w-0 rounded-lg border border-emerald-200 bg-white px-2.5 py-1.5 font-mono text-xs text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-emerald-400/30 dark:border-emerald-800/40 dark:bg-slate-900 dark:text-slate-300" />' +
+              '<button type="button" id="invite-copy-btn" class="shrink-0 rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-xs font-medium text-emerald-700 transition hover:bg-emerald-50 dark:border-emerald-700 dark:bg-slate-800 dark:text-emerald-300">Copy link</button>' +
+            '</div>' +
+          '</div>';
+
+        var copyBtn = msgArea.querySelector("#invite-copy-btn");
+        if (copyBtn) {
+          copyBtn.addEventListener("click", function () { _copyToClipboard(url, copyBtn); });
+        }
+        // Auto-select the URL when the input is clicked.
+        var urlInput = msgArea.querySelector("input");
+        if (urlInput) urlInput.addEventListener("click", function () { urlInput.select(); });
+      }
+
+      emailIn.value = "";
+      loadInvitesList();
+
+    } catch (e) {
+      if (err) { err.textContent = e.message || "Failed to create invite."; err.classList.remove("hidden"); }
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML =
+          '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg> Send Invite';
+      }
+    }
+  }
+
+  async function loadInvitesList() {
+    var wrap = $("#invites-wrap");
+    var list = $("#invites-list");
+    if (!wrap || !list) return;
+
+    try {
+      var data    = await LogSightAPI.listInvites();
+      var pending = (data.invites || []).filter(function (i) { return i.is_valid; });
+
+      if (!pending.length) { wrap.classList.add("hidden"); return; }
+
+      wrap.classList.remove("hidden");
+      list.innerHTML = "";
+
+      pending.forEach(function (inv) {
+        var url = _buildInviteUrl(inv.token);
+        var row = document.createElement("div");
+        row.className = "space-y-2 px-5 py-4 border-b border-slate-100 last:border-0 dark:border-slate-800";
+
+        var roleCls = inv.role === "analyst"
+          ? "bg-cyan-100 text-cyan-700 border-cyan-200 dark:bg-cyan-950/40 dark:text-cyan-300 dark:border-cyan-800/40"
+          : "bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800/40 dark:text-slate-300 dark:border-slate-700";
+
+        var expiresDate = inv.expires_at ? inv.expires_at.slice(0, 10) : "—";
+
+        row.innerHTML =
+          '<div class="flex items-center justify-between gap-3">' +
+            '<div class="min-w-0 flex-1">' +
+              '<p class="text-sm font-medium text-slate-800 dark:text-slate-200">' + escapeHtml(inv.email) + '</p>' +
+              '<p class="mt-0.5 text-xs text-slate-400">Invited by ' + escapeHtml(inv.invited_by) + ' · expires ' + escapeHtml(expiresDate) + '</p>' +
+            '</div>' +
+            '<span class="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ' + roleCls + '">' + escapeHtml(inv.role) + '</span>' +
+            '<button type="button" data-revoke-id="' + inv.id + '" class="rounded-lg border border-red-200 px-2.5 py-1 text-xs font-medium text-red-600 transition hover:bg-red-50 dark:border-red-900/50 dark:text-red-400">Revoke</button>' +
+          '</div>' +
+          '<div class="flex items-center gap-2">' +
+            '<input type="text" readonly value="' + escapeHtml(url) + '" ' +
+              'class="flex-1 min-w-0 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 font-mono text-xs text-slate-600 focus:outline-none dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-400" />' +
+            '<button type="button" data-copy-url="' + escapeHtml(url) + '" class="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">Copy link</button>' +
+          '</div>';
+
+        row.querySelector("[data-revoke-id]").addEventListener("click", async function () {
+          if (!confirm("Revoke this invite? The link will stop working immediately.")) return;
+          try {
+            await LogSightAPI.revokeInvite(inv.id);
+            row.remove();
+            if (!list.children.length) wrap.classList.add("hidden");
+          } catch (e) {
+            window.alert(e.message || "Failed to revoke.");
+          }
+        });
+
+        var copyBtn = row.querySelector("[data-copy-url]");
+        if (copyBtn) {
+          copyBtn.addEventListener("click", function () { _copyToClipboard(url, copyBtn); });
+        }
+        var urlInput = row.querySelector("input[readonly]");
+        if (urlInput) urlInput.addEventListener("click", function () { urlInput.select(); });
+
+        list.appendChild(row);
+      });
+    } catch (_) {}
+  }
+
+  async function loadUsersTable() {
+    var tbody = $("#users-body");
+    if (!tbody) return;
+    tbody.innerHTML = '<tr><td colspan="5" class="px-5 py-6 text-center text-sm text-slate-400">Loading…</td></tr>';
+
+    try {
+      var data  = await LogSightAPI.getUsers();
+      var users = data.users || [];
+
+      if (!users.length) {
+        tbody.innerHTML = '<tr><td colspan="5" class="px-5 py-8 text-center text-sm text-slate-400">No users found.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = "";
+      users.forEach(function (u) {
+        var isSelf = (u.username === (window.__logsight_username || ""));
+        var tr = document.createElement("tr");
+        tr.className = "border-b border-slate-100 transition-colors hover:bg-slate-50/60 dark:border-slate-800 dark:hover:bg-slate-800/30";
+
+        var roleBadgeClass = {
+          admin:   "bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-950/40 dark:text-indigo-300 dark:border-indigo-800/40",
+          analyst: "bg-cyan-100 text-cyan-700 border-cyan-200 dark:bg-cyan-950/40 dark:text-cyan-300 dark:border-cyan-800/40",
+          viewer:  "bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800/40 dark:text-slate-300 dark:border-slate-700",
+          pending: "bg-amber-100 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/40",
+        }[u.role] || "bg-slate-100 text-slate-600 border-slate-200";
+
+        var initial = (u.username || "?").slice(0, 1).toUpperCase();
+
+        var roleSelect = isSelf
+          ? '<span class="text-xs text-slate-400 italic">You</span>'
+          : '<select data-uid="' + u.user_id + '" class="user-role-select rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 shadow-sm focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">' +
+            ["admin", "analyst", "viewer", "pending"].map(function (r) {
+              return '<option value="' + r + '"' + (r === u.role ? " selected" : "") + '>' + r.charAt(0).toUpperCase() + r.slice(1) + '</option>';
+            }).join("") +
+            '</select>';
+
+        tr.innerHTML =
+          '<td class="px-5 py-3">' +
+            '<div class="flex items-center gap-3">' +
+              '<span style="width:32px;height:32px;border-radius:50%;background:rgba(15,127,156,0.1);border:1px solid rgba(15,127,156,0.2);display:inline-flex;align-items:center;justify-content:center;font-size:0.8rem;font-weight:700;color:var(--ls-accent);flex-shrink:0;">' + escapeHtml(initial) + '</span>' +
+              '<span class="font-medium text-slate-800 dark:text-slate-200">' + escapeHtml(u.username) + '</span>' +
+            '</div>' +
+          '</td>' +
+          '<td class="px-5 py-3 text-sm text-slate-500 dark:text-slate-400">' + escapeHtml(u.email || "—") + '</td>' +
+          '<td class="whitespace-nowrap px-5 py-3 text-xs text-slate-500 dark:text-slate-400">' + escapeHtml(formatDate(u.date_joined)) + '</td>' +
+          '<td class="px-5 py-3"><span class="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ' + roleBadgeClass + '">' + escapeHtml(u.role || "—") + '</span></td>' +
+          '<td class="px-5 py-3">' + roleSelect + '</td>';
+
+        tbody.appendChild(tr);
+      });
+
+      // Wire role select dropdowns.
+      tbody.querySelectorAll(".user-role-select").forEach(function (sel) {
+        sel.addEventListener("change", async function () {
+          var uid  = sel.getAttribute("data-uid");
+          var role = sel.value;
+          sel.disabled = true;
+          try {
+            await LogSightAPI.assignRole(uid, role);
+            // Update the badge in the same row without reloading.
+            var badge = sel.closest("tr").querySelector("td:nth-child(4) span");
+            var cls = {
+              admin:   "bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-950/40 dark:text-indigo-300 dark:border-indigo-800/40",
+              analyst: "bg-cyan-100 text-cyan-700 border-cyan-200 dark:bg-cyan-950/40 dark:text-cyan-300 dark:border-cyan-800/40",
+              viewer:  "bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800/40 dark:text-slate-300 dark:border-slate-700",
+              pending: "bg-amber-100 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/40",
+            }[role] || "";
+            if (badge) { badge.className = "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium " + cls; badge.textContent = role; }
+          } catch (err) {
+            window.alert(err.message || "Failed to assign role.");
+          } finally {
+            sel.disabled = false;
+          }
+        });
+      });
+
+    } catch (err) {
+      tbody.innerHTML = '<tr><td colspan="5" class="px-5 py-4 text-sm text-red-500">' + escapeHtml(err.message || "Failed to load users.") + '</td></tr>';
+    }
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     initTheme();
     initTopNavigation();
+    initAdminNav();
     initUpload();
     bindNav();
     initDashboardControls();

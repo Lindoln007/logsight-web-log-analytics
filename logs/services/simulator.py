@@ -93,3 +93,93 @@ def generate_log_entries(dataset_id: int, owner, count: int = 10) -> dict[str, A
     ]
 
     return {"generated": len(entries), "entries": serialized}
+
+
+def simulate_error_spike(dataset_id: int, owner, count: int = 30) -> dict[str, Any]:
+    """
+    Generate *count* entries that are heavily weighted toward 4xx/5xx status
+    codes, deliberately pushing the dataset's error rate above critical threshold.
+    """
+    from logs.models import Dataset, LogEntry
+
+    dataset = Dataset.objects.get(pk=dataset_id, owner=owner)
+    now     = datetime.now(tz=dt_timezone.utc)
+
+    error_statuses = [400, 401, 403, 404, 500, 502, 503] * 10  # 70 % errors
+    mixed_statuses = error_statuses + [200] * 10                # pad with some ok
+
+    entries: list[LogEntry] = []
+    for _ in range(count):
+        status = random.choice(mixed_statuses)
+        entries.append(
+            LogEntry(
+                dataset=dataset,
+                timestamp=now,
+                method=random.choice(SAMPLE_METHODS),
+                endpoint=random.choice(SAMPLE_ENDPOINTS),
+                status_code=status,
+                ip_address=random.choice(SAMPLE_IPS),
+                response_size=random.randint(200, 5_000),
+                user_agent="LogSight-Simulator/ErrorSpike",
+            )
+        )
+
+    LogEntry.objects.bulk_create(entries)
+    dataset.total_entries = dataset.entries.count()
+    dataset.save(update_fields=["total_entries"])
+
+    serialized = [
+        {
+            "timestamp":   e.timestamp.isoformat(),
+            "method":      e.method,
+            "endpoint":    e.endpoint,
+            "status_code": e.status_code,
+            "ip_address":  e.ip_address,
+            "response_size": e.response_size,
+        }
+        for e in entries
+    ]
+    return {"generated": len(entries), "entries": serialized, "spike_type": "error"}
+
+
+def simulate_traffic_spike(dataset_id: int, owner, count: int = 50) -> dict[str, Any]:
+    """
+    Generate a large burst of entries (all normal 200 OK) to push the most-recent
+    hourly request count well above the dataset average, triggering a spike alert.
+    """
+    from logs.models import Dataset, LogEntry
+
+    dataset = Dataset.objects.get(pk=dataset_id, owner=owner)
+    now     = datetime.now(tz=dt_timezone.utc)
+
+    entries: list[LogEntry] = []
+    for _ in range(count):
+        entries.append(
+            LogEntry(
+                dataset=dataset,
+                timestamp=now,
+                method="GET",
+                endpoint=random.choice(SAMPLE_ENDPOINTS),
+                status_code=200,
+                ip_address=random.choice(SAMPLE_IPS),
+                response_size=random.randint(500, 20_000),
+                user_agent="LogSight-Simulator/TrafficSpike",
+            )
+        )
+
+    LogEntry.objects.bulk_create(entries)
+    dataset.total_entries = dataset.entries.count()
+    dataset.save(update_fields=["total_entries"])
+
+    serialized = [
+        {
+            "timestamp":   e.timestamp.isoformat(),
+            "method":      e.method,
+            "endpoint":    e.endpoint,
+            "status_code": e.status_code,
+            "ip_address":  e.ip_address,
+            "response_size": e.response_size,
+        }
+        for e in entries
+    ]
+    return {"generated": len(entries), "entries": serialized, "spike_type": "traffic"}

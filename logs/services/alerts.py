@@ -350,7 +350,108 @@ def auto_check_alerts(dataset_id: int, owner) -> dict:
     else:
         overall = "ok"
 
+    # Persist warning/critical findings as Alert records so they appear in history.
+    _persist_auto_alerts(dataset_id, owner, results)
+
     return {"status": overall, "results": results}
+
+
+def _persist_auto_alerts(dataset_id: int, owner, results: list[dict]) -> None:
+    """
+    For each warning/critical result, get-or-create a system AlertRule for the
+    dataset and write an Alert record so the finding is visible in history.
+    Errors are swallowed so a persistence failure never breaks the check response.
+    """
+    try:
+        from logs.models import Alert, AlertRule, Dataset
+        from logs.services.notifications import create_notification
+
+        dataset = Dataset.objects.get(pk=dataset_id, owner=owner)
+
+        # One system rule per dataset — created automatically on first auto-check.
+        rule, _ = AlertRule.objects.get_or_create(
+            dataset=dataset,
+            owner=owner,
+            name="__auto_check__",
+            defaults={
+                "error_rate_threshold":    _AUTO_ERROR_WARN,
+                "request_spike_multiplier": _AUTO_SPIKE_WARN,
+                "is_active": True,
+            },
+        )
+
+        check_to_alert_type = {
+            "error_rate":    Alert.ALERT_TYPE_ERROR_RATE,
+            "traffic_spike": Alert.ALERT_TYPE_REQUEST_SPIKE,
+        }
+
+        for r in results:
+            if r["status"] not in ("warning", "critical"):
+                continue
+
+            alert_type = check_to_alert_type.get(r["check"], r["check"])
+            severity   = "high" if r["status"] == "critical" else "medium"
+
+            alert = Alert.objects.create(
+                rule=rule,
+                alert_type=alert_type,
+                value=r["value"],
+                threshold=r["threshold"],
+                severity=severity,
+                message=r["message"],
+            )
+
+            try:
+                create_notification(
+                    owner,
+                    r["message"],
+                    severity=severity,
+                    notification_type="alert",
+                    dataset=dataset,
+                )
+            except Exception:
+                pass
+
+    except Exception:
+        import logging as _log
+        _log.getLogger(__name__).exception(
+            "Failed to persist auto-check alerts for dataset_id=%s", dataset_id
+        )
+
+
+# ---------------------------------------------------------------------------
+# All-dataset alert history  (used by Alerts module history panel)
+# ---------------------------------------------------------------------------
+
+def get_all_alert_history(owner, limit: int = 100) -> list[dict]:
+    """
+    Return the most-recent *limit* Alert records across ALL datasets owned by
+    *owner*, including the dataset name so the frontend can display it.
+    """
+    from logs.models import Alert
+
+    alerts = (
+        Alert.objects
+        .filter(rule__owner=owner)
+        .select_related("rule__dataset")
+        .order_by("-triggered_at")[:limit]
+    )
+    return [_serialize_alert_with_dataset(a) for a in alerts]
+
+
+def _serialize_alert_with_dataset(alert) -> dict:
+    return {
+        "id":           alert.pk,
+        "triggered_at": alert.triggered_at.isoformat(),
+        "alert_type":   alert.alert_type,
+        "severity":     alert.severity,
+        "message":      alert.message,
+        "value":        float(alert.value),
+        "threshold":    float(alert.threshold),
+        "dataset_id":   alert.rule.dataset_id,
+        "dataset_name": alert.rule.dataset.name if alert.rule.dataset else "—",
+        "rule_name":    alert.rule.name,
+    }
 
 
 # ---------------------------------------------------------------------------

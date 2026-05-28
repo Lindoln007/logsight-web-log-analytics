@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(psql -U postgres -c \"CREATE DATABASE loganalytics;\")",
-      "Bash(find 'D:\\\\Projects\\\\Final Year Project\\\\Log Sight- Web Based Log Analytics System\\\\frontend' -type f \\\\\\(-name *.html -o -name *.css -o -name *.js \\\\\\))"
+      "Bash(find 'D:\\\\Projects\\\\Final Year Project\\\\Log Sight- Web Based Log Analytics System\\\\frontend' -type f \\\\\\(-name *.html -o -name *.css -o -name *.js \\\\\\))",
+      "Bash(node \"C:\\\\Users\\\\Asante\\\\AppData\\\\Roaming\\\\Claude\\\\local-agent-mode-sessions\\\\skills-plugin\\\\9a300d52-66fc-409b-8d0a-a5b2b4bb9850\\\\d2f0b794-af1c-4453-b18c-ffa1199a01c7\\\\skills\\\\impeccable\\\\scripts\\\\cleanup-deprecated.mjs\")",
+      "mcp__Claude_in_Chrome__list_connected_browsers"
     ]
   }
 }
