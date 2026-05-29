@@ -18,6 +18,10 @@ def serve_frontend_index(request):
         user_role = profile.role
     except Exception:
         user_role = "pending"
+
+    if user_role == "pending":
+        return render(request, "accounts/pending.html")
+
     return render(request, "logs/app_shell.html", {"user_role": user_role})
 
 

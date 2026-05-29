@@ -1,0 +1,52 @@
+{% extends "accounts/base.html" %}
+{% block title %}Access Pending | LogSight{% endblock %}
+
+{% block content %}
+<div class="space-y-6 text-center">
+
+  <!-- Icon -->
+  <div style="width:56px;height:56px;border-radius:16px;background:rgba(15,127,156,0.08);border:1px solid rgba(15,127,156,0.18);display:flex;align-items:center;justify-content:center;margin:0 auto;">
+    <svg width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.75"
+         stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"
+         style="color:var(--ls-accent);">
+      <circle cx="12" cy="12" r="10"/>
+      <polyline points="12 6 12 12 16 14"/>
+    </svg>
+  </div>
+
+  <div>
+    <h1 class="text-[1.3rem] font-semibold" style="color:var(--ls-text);letter-spacing:-0.01em;">
+      Your account is pending
+    </h1>
+    <p class="mt-2 text-sm leading-relaxed" style="color:var(--ls-muted);">
+      Hi <strong style="color:var(--ls-text);">{{ request.user.username }}</strong>,
+      your account has been created but hasn't been assigned a role yet.
+      An admin needs to grant you access before you can use LogSight.
+    </p>
+  </div>
+
+  <div style="border-radius:12px;background:rgba(15,127,156,0.06);border:1px solid rgba(15,127,156,0.14);padding:14px 16px;text-align:left;">
+    <p class="text-xs font-semibold uppercase tracking-wide" style="color:var(--ls-faint);margin-bottom:8px;">What happens next</p>
+    <ul style="display:flex;flex-direction:column;gap:6px;">
+      <li style="display:flex;align-items:flex-start;gap:8px;font-size:0.82rem;color:var(--ls-muted);">
+        <span style="margin-top:3px;width:6px;height:6px;border-radius:50%;background:var(--ls-accent);flex-shrink:0;display:inline-block;"></span>
+        An admin assigns you a role (Analyst or Viewer)
+      </li>
+      <li style="display:flex;align-items:flex-start;gap:8px;font-size:0.82rem;color:var(--ls-muted);">
+        <span style="margin-top:3px;width:6px;height:6px;border-radius:50%;background:var(--ls-accent);flex-shrink:0;display:inline-block;"></span>
+        Log back in to access the workspace
+      </li>
+    </ul>
+  </div>
+
+  <form method="post" action="{% url 'accounts:logout' %}">
+    {% csrf_token %}
+    <button type="submit"
+            class="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-white"
+            style="background:var(--ls-accent);box-shadow:0 4px 14px -6px rgba(15,127,156,0.5);border:none;cursor:pointer;">
+      Sign out
+    </button>
+  </form>
+
+</div>
+{% endblock %}

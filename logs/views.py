@@ -113,6 +113,14 @@ def dataset_status_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
 @login_required
 @require_http_methods(["GET", "POST"])
 def upload_log_view(request: HttpRequest) -> JsonResponse:
+    if request.method == "POST":
+        from logs.services.rbac import get_or_create_profile
+        try:
+            if get_or_create_profile(request.user).role not in ("admin", "analyst"):
+                return JsonResponse({"error": "You need Analyst or Admin access to upload log files."}, status=403)
+        except Exception:
+            return JsonResponse({"error": "Role check failed."}, status=403)
+
     if request.method == "GET":
         return JsonResponse(
             {
@@ -152,6 +160,12 @@ def upload_log_view(request: HttpRequest) -> JsonResponse:
 @login_required
 @require_http_methods(["POST", "DELETE"])
 def delete_dataset_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
+    from logs.services.rbac import get_or_create_profile
+    try:
+        if get_or_create_profile(request.user).role not in ("admin", "analyst"):
+            return JsonResponse({"error": "You need Analyst or Admin access to delete datasets."}, status=403)
+    except Exception:
+        return JsonResponse({"error": "Role check failed."}, status=403)
     dataset = _get_user_dataset(request, dataset_id)
     serialized_dataset = serialize_dataset(dataset)
     delete_dataset_and_file(dataset, owner=request.user)
@@ -568,7 +582,11 @@ def alerts_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
         history = get_alert_history(dataset_id, owner=request.user, limit=20)
         return JsonResponse({"rules": rules, "recent_alerts": history}, status=200)
 
-    # POST — create rule
+    # POST — create rule (analyst/admin only)
+    role_err = _require_analyst(request)
+    if role_err:
+        return role_err
+
     try:
         body = json.loads(request.body)
     except (ValueError, KeyError):
@@ -585,6 +603,9 @@ def alert_rule_detail_view(request: HttpRequest, dataset_id: int, rule_id: int) 
     PUT/PATCH /logs/datasets/<id>/alerts/<rule_id>/  — update a rule.
     DELETE    /logs/datasets/<id>/alerts/<rule_id>/  — delete a rule.
     """
+    role_err = _require_analyst(request)
+    if role_err:
+        return role_err
     _get_user_dataset(request, dataset_id)
 
     # Verify the rule belongs to this user.
@@ -916,6 +937,18 @@ def notifications_count_view(request: HttpRequest) -> JsonResponse:
 # ---------------------------------------------------------------------------
 
 
+def _require_analyst(request):
+    """Return a 403 JsonResponse if the user is not admin or analyst, else None."""
+    from logs.services.rbac import get_or_create_profile
+    try:
+        role = get_or_create_profile(request.user).role
+        if role not in ("admin", "analyst"):
+            return JsonResponse({"error": "You need Analyst or Admin access to perform this action."}, status=403)
+    except Exception:
+        return JsonResponse({"error": "Role check failed."}, status=403)
+    return None
+
+
 @login_required
 @require_POST
 def simulate_logs_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
@@ -928,6 +961,9 @@ def simulate_logs_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
     ----------------
     count : int — number of entries to generate (default 10, max 50)
     """
+    err = _require_analyst(request)
+    if err:
+        return err
     _get_user_dataset(request, dataset_id)
 
     count = min(_parse_int_param(request, "count", 10), 50)
@@ -953,6 +989,9 @@ def simulate_logs_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
 @require_POST
 def simulate_error_spike_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
     """POST /logs/datasets/<id>/simulate/error-spike/ — inject high-error entries."""
+    err = _require_analyst(request)
+    if err:
+        return err
     dataset = _get_user_dataset(request, dataset_id)
     error   = _dataset_ready_or_error(dataset)
     if error:
@@ -975,6 +1014,9 @@ def simulate_error_spike_view(request: HttpRequest, dataset_id: int) -> JsonResp
 @require_POST
 def simulate_traffic_spike_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
     """POST /logs/datasets/<id>/simulate/traffic-spike/ — inject burst entries."""
+    err = _require_analyst(request)
+    if err:
+        return err
     dataset = _get_user_dataset(request, dataset_id)
     error   = _dataset_ready_or_error(dataset)
     if error:
