@@ -7,6 +7,8 @@ instances when it does.
 """
 from __future__ import annotations
 
+from datetime import timedelta
+
 from django.utils import timezone
 
 
@@ -130,33 +132,35 @@ def check_and_trigger_alerts(dataset_id: int, owner) -> list[dict]:
         if rule.error_rate_threshold is not None:
             threshold = float(rule.error_rate_threshold)
             if error_rate > threshold:
-                alert = Alert.objects.create(
-                    rule=rule,
-                    triggered_at=timezone.now(),
-                    alert_type=Alert.ALERT_TYPE_ERROR_RATE,
-                    value=error_rate,
-                    threshold=threshold,
-                    severity=_severity(error_rate, threshold),
-                    message=(
-                        f"Error rate {error_rate:.2f}% exceeded the configured "
-                        f"threshold of {threshold:.2f}%."
-                    ),
-                )
-                triggered.append(_serialize_alert(alert))
-                try:
-                    from logs.services.notifications import create_notification
-                    create_notification(
-                        rule.owner,
-                        alert.message,
-                        severity=alert.severity,
-                        notification_type="alert",
-                        dataset=rule.dataset,
+                severity = _severity(error_rate, threshold)
+                if not _has_recent_matching_alert(rule, Alert.ALERT_TYPE_ERROR_RATE, severity):
+                    alert = Alert.objects.create(
+                        rule=rule,
+                        triggered_at=timezone.now(),
+                        alert_type=Alert.ALERT_TYPE_ERROR_RATE,
+                        value=error_rate,
+                        threshold=threshold,
+                        severity=severity,
+                        message=(
+                            f"Error rate {error_rate:.2f}% exceeded the configured "
+                            f"threshold of {threshold:.2f}%."
+                        ),
                     )
-                except Exception:
-                    import logging as _logging
-                    _logging.getLogger(__name__).exception(
-                        "Failed to create notification for alert_id=%s", alert.pk
-                    )
+                    triggered.append(_serialize_alert(alert))
+                    try:
+                        from logs.services.notifications import create_notification
+                        create_notification(
+                            rule.owner,
+                            alert.message,
+                            severity=alert.severity,
+                            notification_type="alert",
+                            dataset=rule.dataset,
+                        )
+                    except Exception:
+                        import logging as _logging
+                        _logging.getLogger(__name__).exception(
+                            "Failed to create notification for alert_id=%s", alert.pk
+                        )
 
         # ── Request-spike multiplier ─────────────────────────────────────────
         if rule.request_spike_multiplier is not None:
@@ -168,13 +172,16 @@ def check_and_trigger_alerts(dataset_id: int, owner) -> list[dict]:
                 recent = counts[-1]
                 spike_threshold = mean * multiplier
                 if mean > 0 and recent > spike_threshold:
+                    severity = _severity(recent, spike_threshold)
+                    if _has_recent_matching_alert(rule, Alert.ALERT_TYPE_REQUEST_SPIKE, severity):
+                        continue
                     alert = Alert.objects.create(
                         rule=rule,
                         triggered_at=timezone.now(),
                         alert_type=Alert.ALERT_TYPE_REQUEST_SPIKE,
                         value=recent,
                         threshold=round(spike_threshold, 2),
-                        severity=_severity(recent, spike_threshold),
+                        severity=severity,
                         message=(
                             f"Most-recent hourly request count {recent:,} exceeded "
                             f"{multiplier}× the mean ({mean:.0f}), "
@@ -209,6 +216,7 @@ _AUTO_ERROR_WARN     = 10.0   # % error rate  → warning
 _AUTO_ERROR_CRITICAL = 25.0   # %             → critical
 _AUTO_SPIKE_WARN     = 2.0    # × mean hourly → warning
 _AUTO_SPIKE_CRITICAL = 3.0    # × mean hourly → critical
+_ALERT_REPEAT_COOLDOWN = timedelta(hours=1)
 
 
 def auto_check_alerts(dataset_id: int, owner) -> dict:
@@ -392,6 +400,9 @@ def _persist_auto_alerts(dataset_id: int, owner, results: list[dict]) -> None:
             alert_type = check_to_alert_type.get(r["check"], r["check"])
             severity   = "high" if r["status"] == "critical" else "medium"
 
+            if _has_recent_matching_alert(rule, alert_type, severity):
+                continue
+
             alert = Alert.objects.create(
                 rule=rule,
                 alert_type=alert_type,
@@ -457,6 +468,18 @@ def _serialize_alert_with_dataset(alert) -> dict:
 # ---------------------------------------------------------------------------
 # Utility
 # ---------------------------------------------------------------------------
+
+def _has_recent_matching_alert(rule, alert_type: str, severity: str) -> bool:
+    """Return True when the same alert type/severity was recorded recently."""
+    from logs.models import Alert
+
+    return Alert.objects.filter(
+        rule=rule,
+        alert_type=alert_type,
+        severity=severity,
+        triggered_at__gte=timezone.now() - _ALERT_REPEAT_COOLDOWN,
+    ).exists()
+
 
 def _severity(value: float, threshold: float) -> str:
     """Map the ratio of value to threshold to a severity label."""

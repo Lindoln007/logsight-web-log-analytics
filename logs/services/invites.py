@@ -130,7 +130,7 @@ def revoke_invite(invite_id: int, admin_user) -> bool:
 # ---------------------------------------------------------------------------
 
 def _send_invite_email(token) -> None:
-    """Send the invite link to the recipient. Fails silently on error."""
+    """Send the invite link to the recipient and log SMTP failures."""
     try:
         from django.conf import settings
         from django.core.mail import send_mail
@@ -158,7 +158,7 @@ def _send_invite_email(token) -> None:
             message=body,
             from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[token.email],
-            fail_silently=True,
+            fail_silently=False,
         )
     except Exception:
         logger.exception("Failed to send invite email for token_id=%s", token.pk)

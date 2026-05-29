@@ -165,19 +165,20 @@ LOGOUT_REDIRECT_URL = 'accounts:login'
 # Production: swap EMAIL_BACKEND for an SMTP backend and set the vars below.
 # Use Gmail SMTP when GMAIL_APP_PASSWORD is set in .env; otherwise fall back
 # to the console backend so development works without credentials.
+_gmail_address = os.getenv('GMAIL_ADDRESS', 'mbayaasante@gmail.com')
 _gmail_password = os.getenv('GMAIL_APP_PASSWORD', '')
 if _gmail_password:
     EMAIL_BACKEND   = 'django.core.mail.backends.smtp.EmailBackend'
     EMAIL_HOST      = 'smtp.gmail.com'
     EMAIL_PORT      = 587
     EMAIL_USE_TLS   = True
-    EMAIL_HOST_USER = os.getenv('GMAIL_ADDRESS', 'mbayaasante@gmail.com')
+    EMAIL_HOST_USER = _gmail_address
     EMAIL_HOST_PASSWORD = _gmail_password
 else:
     # No credentials — emails print to the runserver terminal instead.
     EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 
-DEFAULT_FROM_EMAIL   = 'LogSight Alerts <noreply@logsight.local>'
+DEFAULT_FROM_EMAIL   = os.getenv('DEFAULT_FROM_EMAIL', f'LogSight Alerts <{_gmail_address if _gmail_password else "noreply@logsight.local"}>')
 LOGSIGHT_ALERT_EMAIL = os.getenv('LOGSIGHT_ALERT_EMAIL', 'mbayaasante@gmail.com')
 
 # ---------------------------------------------------------------------------
@@ -268,4 +269,3 @@ LOGGING = {
         },
     },
 }
-

@@ -11,9 +11,16 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+_EMAIL_SEVERITIES = {
+    "warning": "warning",
+    "critical": "critical",
+    "medium": "warning",
+    "high": "critical",
+}
+
 
 def _send_alert_email(user, message: str, severity: str, dataset_name: str | None) -> None:
-    """Send an email for warning/critical notifications. Fails silently."""
+    """Send an email for warning/critical notifications and log SMTP failures."""
     try:
         from django.conf import settings
         from django.core.mail import send_mail
@@ -22,7 +29,8 @@ def _send_alert_email(user, message: str, severity: str, dataset_name: str | Non
         if not recipient:
             return
 
-        severity_label = severity.upper()
+        email_severity = _EMAIL_SEVERITIES.get(severity, severity)
+        severity_label = email_severity.upper()
         dataset_str    = f" [{dataset_name}]" if dataset_name else ""
         subject        = f"[LogSight {severity_label}]{dataset_str} Alert triggered"
         body = (
@@ -38,7 +46,7 @@ def _send_alert_email(user, message: str, severity: str, dataset_name: str | Non
             message=body,
             from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[recipient],
-            fail_silently=True,
+            fail_silently=False,
         )
     except Exception:
         logger.exception("Failed to send alert email for user=%s", getattr(user, "pk", "?"))
@@ -85,7 +93,7 @@ def create_notification(
         severity,
     )
 
-    if severity in ("warning", "critical"):
+    if severity in _EMAIL_SEVERITIES:
         dataset_name = dataset.name if dataset else None
         _send_alert_email(user, message, severity, dataset_name)
 

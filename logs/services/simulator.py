@@ -11,6 +11,8 @@ import random
 from datetime import datetime, timezone as dt_timezone
 from typing import Any
 
+from logs.services.analytics import invalidate_analytics_cache
+
 SAMPLE_IPS = (
     ["192.168.1." + str(i) for i in range(1, 30)]
     + ["10.0.0." + str(i) for i in range(1, 20)]
@@ -29,13 +31,12 @@ SAMPLE_ENDPOINTS = [
 ]
 SAMPLE_METHODS = ["GET"] * 7 + ["POST"] * 2 + ["DELETE"]
 SAMPLE_STATUS = (
-    [200] * 50
+    [200] * 78
     + [201] * 10
-    + [301] * 5
-    + [404] * 15
-    + [500] * 8
-    + [403] * 7
-    + [401] * 5
+    + [301] * 7
+    + [404] * 3
+    + [500]
+    + [403]
 )
 
 
@@ -68,6 +69,7 @@ def generate_log_entries(dataset_id: int, owner, count: int = 10) -> dict[str, A
                 method=random.choice(SAMPLE_METHODS),
                 endpoint=random.choice(SAMPLE_ENDPOINTS),
                 status_code=status,
+                error_flag=status >= 400,
                 ip_address=random.choice(SAMPLE_IPS),
                 response_size=random.randint(200, 50_000),
                 user_agent="LogSight-Simulator/1.0",
@@ -75,6 +77,7 @@ def generate_log_entries(dataset_id: int, owner, count: int = 10) -> dict[str, A
         )
 
     LogEntry.objects.bulk_create(entries)
+    invalidate_analytics_cache(dataset_id)
 
     # Re-count so total_entries stays accurate.
     dataset.total_entries = dataset.entries.count()
@@ -118,6 +121,7 @@ def simulate_error_spike(dataset_id: int, owner, count: int = 30) -> dict[str, A
                 method=random.choice(SAMPLE_METHODS),
                 endpoint=random.choice(SAMPLE_ENDPOINTS),
                 status_code=status,
+                error_flag=status >= 400,
                 ip_address=random.choice(SAMPLE_IPS),
                 response_size=random.randint(200, 5_000),
                 user_agent="LogSight-Simulator/ErrorSpike",
@@ -125,6 +129,7 @@ def simulate_error_spike(dataset_id: int, owner, count: int = 30) -> dict[str, A
         )
 
     LogEntry.objects.bulk_create(entries)
+    invalidate_analytics_cache(dataset_id)
     dataset.total_entries = dataset.entries.count()
     dataset.save(update_fields=["total_entries"])
 
@@ -161,6 +166,7 @@ def simulate_traffic_spike(dataset_id: int, owner, count: int = 50) -> dict[str,
                 method="GET",
                 endpoint=random.choice(SAMPLE_ENDPOINTS),
                 status_code=200,
+                error_flag=False,
                 ip_address=random.choice(SAMPLE_IPS),
                 response_size=random.randint(500, 20_000),
                 user_agent="LogSight-Simulator/TrafficSpike",
@@ -168,6 +174,7 @@ def simulate_traffic_spike(dataset_id: int, owner, count: int = 50) -> dict[str,
         )
 
     LogEntry.objects.bulk_create(entries)
+    invalidate_analytics_cache(dataset_id)
     dataset.total_entries = dataset.entries.count()
     dataset.save(update_fields=["total_entries"])
 
