@@ -24,20 +24,12 @@ def register_view(request):
         return redirect("app-shell")
 
     from logs.services.invites import validate_invite, redeem_invite
+    from logs.services.rbac import get_or_create_profile
 
     token_str = request.GET.get("invite") or request.POST.get("invite_token", "")
-    invite    = validate_invite(token_str) if token_str else None
-
-    # No valid token → show invitation-only gate, no form.
-    if not invite:
-        return render(request, "accounts/register.html", {
-            "invite_required": True,
-            "invite_invalid":  bool(token_str),  # True = bad token, False = none at all
-        })
-
-    # Valid token → show the registration form.
-    # If the token has an email pre-assigned, lock the field; otherwise let the invitee fill it.
-    has_fixed_email = bool(invite.email)
+    invite = validate_invite(token_str) if token_str else None
+    invite_invalid = bool(token_str) and invite is None
+    has_fixed_email = bool(invite and invite.email)
 
     if request.method == "POST":
         form = RegistrationForm(request.POST)
@@ -50,22 +42,36 @@ def register_view(request):
             if has_fixed_email:
                 user.email = invite.email
             user.save()
-            redeem_invite(token_str, user)
+
+            if invite:
+                redeem_invite(token_str, user)
+                messages.success(
+                    request,
+                    f"Welcome to LogSight! You've been added as {invite.role.capitalize()}.",
+                )
+            else:
+                profile = get_or_create_profile(user)
+                profile.role = profile.ROLE_ADMIN
+                profile.save(update_fields=["role"])
+                messages.success(
+                    request,
+                    "Welcome to LogSight! Your account has been created and you are now an admin.",
+                )
+
             login(request, user)
-            messages.success(request, f"Welcome to LogSight! You've been added as {invite.role.capitalize()}.")
             return redirect("app-shell")
     else:
-        form = RegistrationForm(initial={"email": invite.email or ""})
+        form = RegistrationForm(initial={"email": invite.email if invite else ""})
 
     if has_fixed_email:
         form.fields["email"].widget.attrs["readonly"] = True
         form.fields["email"].widget.attrs["class"] += " opacity-60 cursor-not-allowed"
 
     return render(request, "accounts/register.html", {
-        "form":        form,
-        "invite":      invite,
-        "token_str":   token_str,
-        "invite_valid": True,
+        "form":          form,
+        "invite":        invite,
+        "token_str":     token_str,
+        "invite_invalid": invite_invalid,
     })
 
 

@@ -26,9 +26,8 @@
   }
 </style>
 
-{% if invite_required %}
+{% if invite_invalid %}
 
-  <!-- Invitation-only gate -->
   <div class="text-center">
     <div class="ls-gate-icon">
       <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"
@@ -39,18 +38,11 @@
       </svg>
     </div>
     <h1 class="login-heading">
-      Registration by invitation only
+      Invite code not valid
     </h1>
     <p class="login-subheading">
-      {% if invite_invalid %}
-        This invite code has expired or has already been used.
-        Ask an admin to generate a new one for you.
-      {% else %}
-        New accounts require an invitation from an admin.
-        If you've received an invite code, enter it on the
-        <a href="{% url 'accounts:login' %}"
-           style="color: var(--ls-accent); font-weight: 600;">login page</a>.
-      {% endif %}
+      That invite code is expired or invalid.
+      You can still create a new account below, or ask an admin for a fresh invite.
     </p>
     <a href="{% url 'accounts:login' %}"
        class="mt-6 inline-flex rounded-xl px-4 py-2 text-sm font-semibold"
@@ -59,7 +51,7 @@
     </a>
   </div>
 
-{% else %}
+{% endif %}
 
   <!-- Registration form -->
   <div>
@@ -69,22 +61,28 @@
         Create your account
       </h1>
       <p class="login-subheading">
-        Finish your invited registration to access the analytics workspace.
+        {% if invite %}
+          Finish your invited registration to access the analytics workspace.
+        {% else %}
+          Create your own LogSight account and manage your workspace as an admin.
+        {% endif %}
       </p>
     </div>
 
-    <!-- Invite badge -->
-    <div class="ls-invite-badge">
-      <span class="ls-invite-dot"></span>
-      <div>
-        <p class="text-xs font-semibold" style="color: var(--ls-accent);">
-          Invited by {{ invite.invited_by.username }}
-        </p>
-        <p class="mt-0.5 text-xs" style="color: var(--ls-muted);">
-          You'll join as <strong style="color: var(--ls-text);">{{ invite.role|capfirst }}</strong>{% if invite.email %}&nbsp;·&nbsp; {{ invite.email }}{% endif %}
-        </p>
+    {% if invite %}
+      <!-- Invite badge -->
+      <div class="ls-invite-badge">
+        <span class="ls-invite-dot"></span>
+        <div>
+          <p class="text-xs font-semibold" style="color: var(--ls-accent);">
+            Invited by {{ invite.invited_by.username }}
+          </p>
+          <p class="mt-0.5 text-xs" style="color: var(--ls-muted);">
+            You'll join as <strong style="color: var(--ls-text);">{{ invite.role|capfirst }}</strong>{% if invite.email %}&nbsp;·&nbsp; {{ invite.email }}{% endif %}
+          </p>
+        </div>
       </div>
-    </div>
+    {% endif %}
 
     <form method="post" class="mt-5 flex flex-col gap-5">
       {% csrf_token %}
@@ -124,7 +122,11 @@
          style="color: var(--ls-accent);">Sign in</a>
     </div>
 
+    <div style="margin-top: 20px; text-align:center;">
+      <span style="color: var(--ls-muted);">Have an invite code?</span>
+      <a href="{% url 'accounts:redeem' %}" style="color: var(--ls-accent); font-weight: 600;">Enter it here</a>
+    </div>
+
   </div>
 
-{% endif %}
 {% endblock %}
