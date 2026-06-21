@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import logging
+from urllib.parse import urlencode
 
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.http import HttpRequest, HttpResponse, JsonResponse
-from django.shortcuts import get_object_or_404
+from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
@@ -48,6 +50,42 @@ from logs.services.analytics import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+NEXT_SEMESTER_MODULES = {
+    "anomalies": "Anomalies",
+    "advanced-search": "Advanced Search",
+    "alerts": "Alerts",
+    "forecasting": "Forecasting",
+    "security-insights": "Security Insights",
+    "live-ingestion": "Live Ingestion",
+    "user-management": "User Management",
+}
+
+
+@login_required
+def coming_soon_view(request: HttpRequest) -> HttpResponse:
+    requested = request.GET.get("module", "").strip()
+    module_name = NEXT_SEMESTER_MODULES.get(requested.lower(), requested or "This feature")
+    return render(
+        request,
+        "logs/coming_soon.html",
+        {
+            "module_name": module_name,
+            "module_slug": requested.lower(),
+        },
+    )
+
+
+@login_required
+def next_semester_redirect(
+    request: HttpRequest,
+    *args,
+    module_slug: str = "",
+    **kwargs,
+) -> HttpResponse:
+    query = urlencode({"module": module_slug})
+    return redirect(f"{reverse('coming-soon')}?{query}")
 
 
 def _get_user_dataset(request: HttpRequest, dataset_id: int) -> Dataset:
@@ -930,6 +968,28 @@ def notifications_count_view(request: HttpRequest) -> JsonResponse:
     from logs.services.notifications import get_unread_count
 
     return JsonResponse({"unread_count": get_unread_count(request.user)}, status=200)
+
+
+@login_required
+@require_http_methods(["POST", "DELETE"])
+def notifications_delete_view(request: HttpRequest, notification_id: int) -> JsonResponse:
+    """POST/DELETE /logs/notifications/<id>/delete/ — delete a single notification."""
+    from logs.services.notifications import delete_notification
+
+    deleted = delete_notification(notification_id, user=request.user)
+    if not deleted:
+        return JsonResponse({"error": "Notification not found."}, status=404)
+    return JsonResponse({"deleted": True, "notification_id": notification_id}, status=200)
+
+
+@login_required
+@require_POST
+def notifications_delete_all_view(request: HttpRequest) -> JsonResponse:
+    """POST /logs/notifications/delete-all/ — delete all notifications for the user."""
+    from logs.services.notifications import delete_all_notifications
+
+    count = delete_all_notifications(user=request.user)
+    return JsonResponse({"deleted": count}, status=200)
 
 
 # ---------------------------------------------------------------------------

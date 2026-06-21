@@ -9,6 +9,14 @@
   var routes       = ["dashboard", "upload", "datasets", "viewer",
                       "forecast", "anomalies", "alerts", "reports",
                       "security", "compare", "search", "simulate", "users"];
+  var unavailableRoutes = {
+    forecast: "forecasting",
+    anomalies: "anomalies",
+    alerts: "alerts",
+    security: "security-insights",
+    simulate: "live-ingestion",
+    users: "user-management",
+  };
 
   var viewerPage             = 1;
   var viewerSearchDebounce;
@@ -181,9 +189,17 @@
 
   function setHashRoute(name) {
     var next = routes.indexOf(name) >= 0 ? name : "dashboard";
+    if (unavailableRoutes[next]) {
+      goToComingSoon(unavailableRoutes[next]);
+      return;
+    }
     var hash = "#/" + next;
     if (window.location.hash === hash) runRoute(next);
     else window.location.hash = hash;
+  }
+
+  function goToComingSoon(moduleSlug) {
+    window.location.href = "/coming-soon/?module=" + encodeURIComponent(moduleSlug || "feature");
   }
 
   function updateNavActive(route) {
@@ -239,6 +255,10 @@
   }
 
   function runRoute(route) {
+    if (unavailableRoutes[route]) {
+      window.location.replace("/coming-soon/?module=" + encodeURIComponent(unavailableRoutes[route]));
+      return;
+    }
     showView(route);
     if (route === "dashboard")  loadDashboardData();
     if (route === "datasets")   loadDatasetsTable();
@@ -510,12 +530,12 @@
       fromIn.min = minDate; fromIn.max = maxDate;
       toIn.min   = minDate; toIn.max   = maxDate;
 
+      // Pre-fill with the dataset's actual date range (same as log viewer).
+      fromIn.value = minDate;
+      toIn.value   = maxDate;
+
       // Show the allowed range as text so every browser makes it obvious.
       if (hint) hint.textContent = "(" + minDate + " – " + maxDate + ")";
-
-      // Clamp any already-set values that are now out of range.
-      if (fromIn.value && (fromIn.value < minDate || fromIn.value > maxDate)) fromIn.value = "";
-      if (toIn.value   && (toIn.value   < minDate || toIn.value   > maxDate)) toIn.value   = "";
 
     } catch (_) {}
   }
@@ -1437,8 +1457,12 @@
       fromIn._dboundFilter = true;
       fromIn.addEventListener("change", function () {
         _clampDateInput(fromIn);
-        // From must not exceed To.
-        if (toIn && toIn.value && fromIn.value && fromIn.value > toIn.value) toIn.value = fromIn.value;
+        if (toIn && fromIn.value) {
+          toIn.min = fromIn.value;
+          if (toIn.value && toIn.value < fromIn.value) toIn.value = fromIn.value;
+        } else if (toIn) {
+          toIn.min = _dashDateMin;
+        }
         _updateFilterDot();
         loadDashboardData();
       });
@@ -1447,8 +1471,12 @@
       toIn._dboundFilter = true;
       toIn.addEventListener("change", function () {
         _clampDateInput(toIn);
-        // To must not precede From.
-        if (fromIn && fromIn.value && toIn.value && toIn.value < fromIn.value) fromIn.value = toIn.value;
+        if (fromIn && toIn.value) {
+          fromIn.max = toIn.value;
+          if (fromIn.value && fromIn.value > toIn.value) fromIn.value = toIn.value;
+        } else if (fromIn) {
+          fromIn.max = _dashDateMax;
+        }
         _updateFilterDot();
         loadDashboardData();
       });
@@ -2083,6 +2111,15 @@
         loadNotifications();
       });
     }
+    var deleteAll = $("#notif-delete-all");
+    if (deleteAll && !deleteAll._bound) {
+      deleteAll._bound = true;
+      deleteAll.addEventListener("click", async function () {
+        try { await LogSightAPI.deleteAllNotifs(); } catch (_) {}
+        loadNotifications();
+        pollNotifCount();
+      });
+    }
     document.addEventListener("click", function (e) {
       if (dropdown && !dropdown.classList.contains("hidden") && !bell.contains(e.target) && !dropdown.contains(e.target)) {
         dropdown.classList.add("hidden");
@@ -2124,11 +2161,24 @@
           '<div class="min-w-0 flex-1">' +
             '<p class="text-xs leading-snug text-slate-700 dark:text-slate-300">' + escapeHtml(n.message) + '</p>' +
             '<p class="mt-0.5 text-[10px] text-slate-400">' + escapeHtml(formatDate(n.created_at)) + '</p>' +
-          '</div>';
+          '</div>' +
+          '<button type="button" class="notif-delete-btn ml-2 flex-shrink-0 rounded p-1 text-slate-400 hover:text-red-500 dark:hover:text-red-400" title="Delete">' +
+            '<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' +
+          '</button>';
         if (!n.is_read) {
-          item.addEventListener("click", async function () {
+          item.addEventListener("click", async function (e) {
+            if (e.target.closest(".notif-delete-btn")) return;
             try { await LogSightAPI.markNotifRead(n.id); } catch (_) {}
             item.classList.remove("unread");
+            pollNotifCount();
+          });
+        }
+        var deleteBtn = item.querySelector(".notif-delete-btn");
+        if (deleteBtn) {
+          deleteBtn.addEventListener("click", async function (e) {
+            e.stopPropagation();
+            try { await LogSightAPI.deleteNotif(n.id); } catch (_) {}
+            item.remove();
             pollNotifCount();
           });
         }

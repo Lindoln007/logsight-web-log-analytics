@@ -64,8 +64,8 @@
             <div class="top-nav-group" data-nav-item data-nav-section="analytics">
               <button type="button" class="top-nav-link" aria-haspopup="true">Analytics</button>
               <div class="nav-dropdown">
-                <a href="#/forecast" data-route="forecast">Forecasting<span>Predict traffic and load</span></a>
-                <a href="#/anomalies" data-route="anomalies">Anomalies<span>Detect unusual behavior</span></a>
+                <a href="{% url 'coming-soon' %}?module=forecasting" data-coming-soon="forecasting">Forecasting<span>Predict traffic and load</span></a>
+                <a href="{% url 'coming-soon' %}?module=anomalies" data-coming-soon="anomalies">Anomalies<span>Detect unusual behavior</span></a>
                 <a href="#/compare" data-route="compare">Compare Datasets<span>Side-by-side dataset analysis</span></a>
                 <a href="#/search" data-route="search">Advanced Search<span>Filter and query log entries</span></a>
                 <a href="#/reports" data-route="reports">Reports<span>Export operational summaries</span></a>
@@ -74,15 +74,15 @@
             <div class="top-nav-group" data-nav-item data-nav-section="monitoring">
               <button type="button" class="top-nav-link" aria-haspopup="true">Monitoring</button>
               <div class="nav-dropdown">
-                <a href="#/alerts" data-route="alerts">Alerts<span>Health checks and thresholds</span></a>
-                <a href="#/security" data-route="security">Security Insights<span>Threats and anomalous IPs</span></a>
-                <a href="#/simulate" data-route="simulate">Live Ingestion<span>Simulate real-time log data</span></a>
+                <a href="{% url 'coming-soon' %}?module=alerts" data-coming-soon="alerts">Alerts<span>Health checks and thresholds</span></a>
+                <a href="{% url 'coming-soon' %}?module=security-insights" data-coming-soon="security-insights">Security Insights<span>Threats and anomalous IPs</span></a>
+                <a href="{% url 'coming-soon' %}?module=live-ingestion" data-coming-soon="live-ingestion">Live Ingestion<span>Simulate real-time log data</span></a>
               </div>
             </div>
             <div id="nav-admin-group" class="top-nav-group hidden" data-nav-item data-nav-section="admin">
               <button type="button" class="top-nav-link" aria-haspopup="true">Admin</button>
               <div class="nav-dropdown nav-dropdown--compact">
-                <a href="#/users" data-route="users">User Management<span>Roles and access control</span></a>
+                <a href="{% url 'coming-soon' %}?module=user-management" data-coming-soon="user-management">User Management<span>Roles and access control</span></a>
               </div>
             </div>
           </nav>
@@ -101,7 +101,10 @@
             <div id="notif-dropdown" class="notif-dropdown hidden">
               <div class="notif-dropdown-header">
                 <span class="text-sm font-semibold text-slate-800 dark:text-slate-200">Notifications</span>
-                <button type="button" id="notif-mark-all" class="text-xs text-indigo-600 hover:underline dark:text-indigo-400">Mark all read</button>
+                <div class="flex items-center gap-3">
+                  <button type="button" id="notif-mark-all" class="text-xs text-indigo-600 hover:underline dark:text-indigo-400">Mark all read</button>
+                  <button type="button" id="notif-delete-all" class="text-xs text-red-500 hover:underline dark:text-red-400">Delete all</button>
+                </div>
               </div>
               <div id="notif-list" class="notif-list">
                 <p class="px-4 py-6 text-center text-xs text-slate-400">No notifications yet.</p>
@@ -125,17 +128,17 @@
           <a href="#/datasets" data-route="datasets">Datasets</a>
           <a href="#/viewer" data-route="viewer">Log Viewer</a>
           <p>Analytics</p>
-          <a href="#/forecast" data-route="forecast">Forecasting</a>
-          <a href="#/anomalies" data-route="anomalies">Anomalies</a>
+          <a href="{% url 'coming-soon' %}?module=forecasting" data-coming-soon="forecasting">Forecasting</a>
+          <a href="{% url 'coming-soon' %}?module=anomalies" data-coming-soon="anomalies">Anomalies</a>
           <a href="#/compare" data-route="compare">Compare Datasets</a>
           <a href="#/search" data-route="search">Advanced Search</a>
           <a href="#/reports" data-route="reports">Reports</a>
           <p>Monitoring</p>
-          <a href="#/alerts" data-route="alerts">Alerts</a>
-          <a href="#/security" data-route="security">Security Insights</a>
-          <a href="#/simulate" data-route="simulate">Live Ingestion</a>
+          <a href="{% url 'coming-soon' %}?module=alerts" data-coming-soon="alerts">Alerts</a>
+          <a href="{% url 'coming-soon' %}?module=security-insights" data-coming-soon="security-insights">Security Insights</a>
+          <a href="{% url 'coming-soon' %}?module=live-ingestion" data-coming-soon="live-ingestion">Live Ingestion</a>
           <p id="mobile-admin-label" class="hidden">Admin</p>
-          <a id="mobile-admin-users" href="#/users" data-route="users" class="hidden">User Management</a>
+          <a id="mobile-admin-users" href="{% url 'coming-soon' %}?module=user-management" data-coming-soon="user-management" class="hidden">User Management</a>
         </div>
       </header>
 

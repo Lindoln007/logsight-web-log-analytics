@@ -147,6 +147,22 @@ def get_unread_count(user) -> int:
     return Notification.objects.filter(user=user, is_read=False).count()
 
 
+def delete_notification(notification_id: int, user) -> bool:
+    """Delete a single notification. Returns True if found and deleted."""
+    from logs.models import Notification
+
+    deleted, _ = Notification.objects.filter(pk=notification_id, user=user).delete()
+    return deleted > 0
+
+
+def delete_all_notifications(user) -> int:
+    """Delete all notifications for *user*. Returns the number deleted."""
+    from logs.models import Notification
+
+    deleted, _ = Notification.objects.filter(user=user).delete()
+    return deleted
+
+
 # ---------------------------------------------------------------------------
 # Serialisation helpers
 # ---------------------------------------------------------------------------

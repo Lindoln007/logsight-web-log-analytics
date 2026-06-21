@@ -78,7 +78,8 @@ urlpatterns = [
     # ------------------------------------------------------------------
     path(
         "datasets/<int:dataset_id>/forecast/",
-        views.forecast_view,
+        views.next_semester_redirect,
+        {"module_slug": "forecasting"},
         name="forecast",
     ),
 
@@ -87,7 +88,8 @@ urlpatterns = [
     # ------------------------------------------------------------------
     path(
         "datasets/<int:dataset_id>/anomalies/",
-        views.anomaly_detection_view,
+        views.next_semester_redirect,
+        {"module_slug": "anomalies"},
         name="anomalies",
     ),
 
@@ -96,27 +98,32 @@ urlpatterns = [
     # ------------------------------------------------------------------
     path(
         "datasets/<int:dataset_id>/alerts/",
-        views.alerts_view,
+        views.next_semester_redirect,
+        {"module_slug": "alerts"},
         name="alerts",
     ),
     path(
         "datasets/<int:dataset_id>/alerts/check/",
-        views.alerts_check_view,
+        views.next_semester_redirect,
+        {"module_slug": "alerts"},
         name="alerts-check",
     ),
     path(
         "datasets/<int:dataset_id>/alerts/history/",
-        views.alert_history_view,
+        views.next_semester_redirect,
+        {"module_slug": "alerts"},
         name="alerts-history",
     ),
     path(
         "datasets/<int:dataset_id>/alerts/auto/",
-        views.auto_alerts_view,
+        views.next_semester_redirect,
+        {"module_slug": "alerts"},
         name="alerts-auto",
     ),
     path(
         "datasets/<int:dataset_id>/alerts/<int:rule_id>/",
-        views.alert_rule_detail_view,
+        views.next_semester_redirect,
+        {"module_slug": "alerts"},
         name="alert-rule-detail",
     ),
 
@@ -143,7 +150,8 @@ urlpatterns = [
     # ------------------------------------------------------------------
     path(
         "datasets/<int:dataset_id>/security/",
-        views.security_insights_view,
+        views.next_semester_redirect,
+        {"module_slug": "security-insights"},
         name="security-insights",
     ),
 
@@ -188,33 +196,48 @@ urlpatterns = [
         views.notifications_mark_read_view,
         name="notifications-mark-read",
     ),
+    path(
+        "notifications/<int:notification_id>/delete/",
+        views.notifications_delete_view,
+        name="notifications-delete",
+    ),
+    path(
+        "notifications/delete-all/",
+        views.notifications_delete_all_view,
+        name="notifications-delete-all",
+    ),
 
     # ------------------------------------------------------------------
     # Log simulator  (Module 6)
     # ------------------------------------------------------------------
     path(
         "datasets/<int:dataset_id>/simulate/",
-        views.simulate_logs_view,
+        views.next_semester_redirect,
+        {"module_slug": "live-ingestion"},
         name="simulate-logs",
     ),
     path(
         "datasets/<int:dataset_id>/simulate/error-spike/",
-        views.simulate_error_spike_view,
+        views.next_semester_redirect,
+        {"module_slug": "live-ingestion"},
         name="simulate-error-spike",
     ),
     path(
         "datasets/<int:dataset_id>/simulate/traffic-spike/",
-        views.simulate_traffic_spike_view,
+        views.next_semester_redirect,
+        {"module_slug": "live-ingestion"},
         name="simulate-traffic-spike",
     ),
     path(
         "datasets/<int:dataset_id>/simulate/download/",
-        views.simulate_download_view,
+        views.next_semester_redirect,
+        {"module_slug": "live-ingestion"},
         name="simulate-download",
     ),
     path(
         "alerts/all-history/",
-        views.all_alerts_history_view,
+        views.next_semester_redirect,
+        {"module_slug": "alerts"},
         name="alerts-all-history",
     ),
 
@@ -223,12 +246,14 @@ urlpatterns = [
     # ------------------------------------------------------------------
     path(
         "admin/users/",
-        views.user_management_view,
+        views.next_semester_redirect,
+        {"module_slug": "user-management"},
         name="admin-users",
     ),
     path(
         "admin/users/<int:user_id>/role/",
-        views.assign_role_view,
+        views.next_semester_redirect,
+        {"module_slug": "user-management"},
         name="admin-assign-role",
     ),
 
@@ -237,12 +262,14 @@ urlpatterns = [
     # ------------------------------------------------------------------
     path(
         "invites/",
-        views.invites_view,
+        views.next_semester_redirect,
+        {"module_slug": "user-management"},
         name="invites",
     ),
     path(
         "invites/<int:invite_id>/revoke/",
-        views.revoke_invite_view,
+        views.next_semester_redirect,
+        {"module_slug": "user-management"},
         name="invite-revoke",
     ),
 ]

@@ -785,6 +785,16 @@
       return result.ok;
     },
 
+    async deleteNotif(notifId) {
+      var result = await fetchJson("/logs/notifications/" + encodeURIComponent(notifId) + "/delete/", { method: "POST" });
+      return result.ok;
+    },
+
+    async deleteAllNotifs() {
+      var result = await fetchJson("/logs/notifications/delete-all/", { method: "POST" });
+      return result.ok;
+    },
+
     // ---- Log Simulator ------------------------------------------------------
 
     async simulateLogs(datasetId, count) {
