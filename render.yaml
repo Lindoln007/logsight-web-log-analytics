@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: logsight
+    runtime: python
+    buildCommand: "./build.sh"
+    startCommand: "gunicorn loganalytics.wsgi:application --config gunicorn.conf.py"
+    envVars:
+      - key: DEBUG
+        value: "False"
+      - key: DATABASE_URL
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: PYTHON_VERSION
+        value: "3.14"
