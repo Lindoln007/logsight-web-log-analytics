@@ -69,3 +69,6 @@ desktop.ini
 *.pem
 *.key
 secrets.json
+
+# ── Analytics result cache ─────────────────────────────────────────────────────
+.cache/
