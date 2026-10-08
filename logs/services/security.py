@@ -1,15 +1,27 @@
 """
 Security insights service for LogSight.
 
-Analyses log entries for common attack / abuse patterns:
+One report built from two complementary kinds of analysis:
+
+Behaviour rules — count what each client did across many requests:
   - Brute force login attempts (high error rate to one endpoint from one IP)
-  - Path scanning (one IP hitting many distinct endpoints)
+  - Path scanning (one IP hitting many distinct endpoints, mostly failing)
   - Sensitive path access (.env, admin, wp-login, etc.)
   - High error concentration (IP responsible for >= 100 errors)
+
+Machine-learning classification — read the content of each request:
+  - A trained classifier labels every request target as normal, SQL injection,
+    cross-site scripting, path traversal, command injection or scanner probe
+    (see ``security_classification.py``).
+
+Neither can do the other's job: a brute-force attack uses perfectly ordinary
+URLs, and a single injection attempt leaves no behavioural trace.  Clients
+caught by more than one kind of finding are reported as repeat offenders.
 """
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -23,21 +35,45 @@ _SENSITIVE_PATTERNS = [
 # Minimum thresholds for each check.
 _BRUTE_FORCE_MIN_ERRORS = 20
 _PATH_SCAN_MIN_PATHS = 15
+# A scanner guesses paths, so most of what it asks for does not exist.  A real
+# visitor or search-engine crawler also touches many paths, but they succeed.
+_PATH_SCAN_MIN_ERROR_SHARE = 0.5
 _HIGH_ERROR_MIN_COUNT = 100
 
-# Weights for risk score computation (0-100 scale).
+# Weights for risk score computation (0-100 scale, capped at 100).
 _WEIGHTS = {
-    "brute_force": 30,
-    "path_scanning": 20,
-    "sensitive_path": 25,
-    "high_error_concentration": 25,
+    # Behaviour rules
+    "brute_force": 20,
+    "path_scanning": 10,
+    "sensitive_path": 10,
+    "high_error_concentration": 10,
+    # Machine-learning classes
+    "sqli": 20,
+    "xss": 10,
+    "path_traversal": 15,
+    "command_injection": 20,
+    "scanner_probe": 10,
+    # Clients caught by more than one kind of finding
+    "multi_vector": 10,
 }
+
+# An ML class counts in full once it has this many requests behind it; fewer
+# requests count for half, so a single borderline request cannot swing the score.
+_ML_FULL_WEIGHT_REQUESTS = 5
 
 
 def get_security_insights(dataset_id: int, owner) -> dict[str, Any]:
     """
-    Run four security checks against a dataset's log entries and return a
-    structured findings dict with a 0-100 risk score.
+    Run the behaviour rules and the request classifier against a dataset and
+    return one structured findings dict with a 0-100 risk score::
+
+        {
+            "findings": [{"type", "source": "rule" | "ai", "severity", "title",
+                          "description", "evidence", "count"}, ...],
+            "risk_score": int,
+            "summary": str,
+            "classification": {...} ,   # ML summary for the page's breakdown
+        }
 
     All model imports are local to avoid circular dependency issues.
     """
@@ -46,7 +82,7 @@ def get_security_insights(dataset_id: int, owner) -> dict[str, Any]:
     base_qs = LogEntry.objects.filter(dataset_id=dataset_id, dataset__owner=owner)
 
     findings: list[dict[str, Any]] = []
-    risk_components: list[int] = []
+    risk_components: list[float] = []
 
     # ------------------------------------------------------------------
     # 1. Brute-force detection
@@ -80,7 +116,31 @@ def get_security_insights(dataset_id: int, owner) -> dict[str, Any]:
         findings.append(he_finding)
         risk_components.append(_WEIGHTS["high_error_concentration"])
 
-    risk_score = min(100, sum(risk_components))
+    for finding in findings:
+        finding["source"] = "rule"
+
+    # ------------------------------------------------------------------
+    # 5. Machine-learning request classification
+    # ------------------------------------------------------------------
+    classification = _run_classification(dataset_id, owner)
+    ip_classes: dict[str, list[str]] = classification.pop("ip_classes", {})
+    for ml_class in classification.get("classes", []):
+        if not ml_class["requests"]:
+            continue
+        findings.append(_classification_finding(ml_class))
+        weight = _WEIGHTS.get(ml_class["key"], 10)
+        full = ml_class["requests"] >= _ML_FULL_WEIGHT_REQUESTS
+        risk_components.append(weight if full else weight / 2)
+
+    # ------------------------------------------------------------------
+    # 6. Clients caught by more than one kind of finding
+    # ------------------------------------------------------------------
+    mv_finding = _check_multi_vector(findings, ip_classes)
+    if mv_finding:
+        findings.append(mv_finding)
+        risk_components.append(_WEIGHTS["multi_vector"])
+
+    risk_score = min(100, round(sum(risk_components)))
 
     if not findings:
         summary = "No security threats detected in the dataset."
@@ -104,6 +164,113 @@ def get_security_insights(dataset_id: int, owner) -> dict[str, Any]:
         "findings": findings,
         "risk_score": risk_score,
         "summary": summary,
+        "classification": classification,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Machine-learning findings
+# ---------------------------------------------------------------------------
+
+def _run_classification(dataset_id: int, owner) -> dict[str, Any]:
+    """Classify the dataset's requests; never let a model problem break the report."""
+    try:
+        from logs.services.security_classification import classify_dataset
+        return dict(classify_dataset(dataset_id, owner))
+    except Exception:
+        logger.exception("Security classification failed for dataset_id=%s", dataset_id)
+        return {
+            "available": False,
+            "note": "The request classifier could not be run on this dataset.",
+        }
+
+
+def _classification_finding(ml_class: dict[str, Any]) -> dict[str, Any]:
+    """Turn one attack class from the classifier into a finding card."""
+    requests = ml_class["requests"]
+    urls = ml_class["distinct_urls"]
+    ips = ml_class["unique_ips"]
+    successful = ml_class["successful_requests"]
+    label = ml_class["label"]
+
+    description = (
+        f"The classifier recognised {requests:,} request(s) across {urls:,} different "
+        f"URL(s) as {label.lower()}"
+        + (f", sent by {ips:,} client(s)." if ips else ".")
+    )
+    if successful:
+        description += (
+            f" {successful:,} of them were answered successfully (2xx/3xx) rather than "
+            "rejected, so they are worth checking first."
+        )
+    top_ips = ml_class.get("top_ips") or []
+    if top_ips:
+        description += f" Most active source: {top_ips[0]['ip']} ({top_ips[0]['requests']:,} requests)."
+
+    return {
+        "type": ml_class["key"],
+        "source": "ai",
+        "severity": ml_class["severity"],
+        "title": f"{label} detected",
+        "description": description,
+        "evidence": [
+            {
+                "endpoint": example["endpoint"],
+                "request_count": example["requests"],
+                "confidence": example["confidence"],
+            }
+            for example in ml_class["examples"]
+        ],
+        "count": requests,
+        "top_ips": top_ips,
+    }
+
+
+def _check_multi_vector(
+    findings: list[dict[str, Any]],
+    ip_classes: dict[str, list[str]],
+) -> dict[str, Any] | None:
+    """
+    Flag clients that appear in two or more different kinds of finding — for
+    example an address that both scanned paths and sent injection attempts.
+    """
+    reasons: dict[str, set[str]] = defaultdict(set)
+
+    for finding in findings:
+        if finding.get("source") != "rule":
+            continue
+        for item in finding.get("evidence", []):
+            if item.get("ip"):
+                reasons[item["ip"]].add(finding["title"])
+
+    titles = {f["type"]: f["title"] for f in findings if f.get("source") == "ai"}
+    for ip, keys in ip_classes.items():
+        for key in keys:
+            if key in titles:
+                reasons[ip].add(titles[key])
+
+    offenders = sorted(
+        ((ip, sorted(why)) for ip, why in reasons.items() if len(why) >= 2),
+        key=lambda pair: (-len(pair[1]), pair[0]),
+    )
+    if not offenders:
+        return None
+
+    top_ip, top_reasons = offenders[0]
+    return {
+        "type": "multi_vector",
+        "source": "combined",
+        "severity": "high",
+        "title": "Repeat Offenders",
+        "description": (
+            f"{len(offenders)} client(s) appear in more than one finding, which makes "
+            f"deliberate attack activity far more likely than coincidence. "
+            f"Most implicated: {top_ip} ({len(top_reasons)} findings)."
+        ),
+        "evidence": [
+            {"ip": ip, "reasons": why} for ip, why in offenders[:20]
+        ],
+        "count": len(offenders),
     }
 
 
@@ -163,19 +330,30 @@ def _check_brute_force(base_qs) -> dict[str, Any] | None:
 
 def _check_path_scanning(base_qs) -> dict[str, Any] | None:
     """
-    Flag IPs that accessed >= 15 distinct endpoints (path enumeration / scanning).
+    Flag IPs that requested >= 15 distinct endpoints *and* got an error for at
+    least half of their requests (path enumeration / scanning).
+
+    The error share separates scanners, which guess at paths that do not
+    exist, from ordinary heavy visitors and search-engine crawlers.
     """
-    from django.db.models import Count
+    from django.db.models import Count, Q
 
     qs = (
         base_qs
         .values("ip_address")
-        .annotate(distinct_paths=Count("endpoint", distinct=True))
+        .annotate(
+            distinct_paths=Count("endpoint", distinct=True),
+            total=Count("id"),
+            errors=Count("id", filter=Q(status_code__gte=400)),
+        )
         .filter(distinct_paths__gte=_PATH_SCAN_MIN_PATHS)
         .order_by("-distinct_paths")
     )
 
-    rows = list(qs)
+    rows = [
+        r for r in qs
+        if r["total"] and r["errors"] / r["total"] >= _PATH_SCAN_MIN_ERROR_SHARE
+    ]
     if not rows:
         return None
 
@@ -183,15 +361,17 @@ def _check_path_scanning(base_qs) -> dict[str, Any] | None:
         {
             "ip": r["ip_address"],
             "distinct_paths": r["distinct_paths"],
+            "error_count": r["errors"],
         }
         for r in rows[:20]
     ]
 
     top = rows[0]
     description = (
-        f"{len(rows)} IP address(es) accessed an unusually large number of distinct "
-        f"endpoints, which may indicate automated path scanning or reconnaissance. "
-        f"Top scanner: {top['ip_address']} hit {top['distinct_paths']} unique endpoints."
+        f"{len(rows)} IP address(es) requested an unusually large number of distinct "
+        f"endpoints and mostly received errors, which indicates automated path "
+        f"scanning or reconnaissance. "
+        f"Top scanner: {top['ip_address']} tried {top['distinct_paths']} unique endpoints."
     )
 
     return {

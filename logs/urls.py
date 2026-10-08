@@ -148,8 +148,7 @@ urlpatterns = [
     # ------------------------------------------------------------------
     path(
         "datasets/<int:dataset_id>/security/",
-        views.next_semester_redirect,
-        {"module_slug": "security-insights"},
+        views.security_insights_view,
         name="security-insights",
     ),
 

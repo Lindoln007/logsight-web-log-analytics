@@ -11,7 +11,6 @@
                       "security", "compare", "search", "simulate", "users"];
   var unavailableRoutes = {
     alerts: "alerts",
-    security: "security-insights",
     simulate: "live-ingestion",
     users: "user-management",
   };
@@ -1643,13 +1642,24 @@
       scoreBdg.className = "rounded-full px-3 py-1 text-sm font-bold " + scoreColor;
     }
 
+    renderSecurityClassification(data.classification);
+
     if (findingsEl) {
       findingsEl.innerHTML = "";
       var findings = data.findings || [];
       if (!findings.length) {
-        if (empty) empty.classList.remove("hidden");
+        if (empty) {
+          empty.classList.remove("hidden");
+          var emptyText = $("p", empty);
+          if (emptyText) emptyText.textContent = "No security findings for this dataset.";
+        }
         return;
       }
+      var sourceBadges = {
+        ai:       ["AI classifier", "bg-indigo-100 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300"],
+        rule:     ["Behaviour rule", "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"],
+        combined: ["Rules + AI", "bg-violet-100 text-violet-700 dark:bg-violet-950/40 dark:text-violet-300"],
+      };
       findings.forEach(function (f) {
         var severityBorder = f.severity === "high"
           ? "border-red-200/80 dark:border-red-800/30"
@@ -1663,27 +1673,101 @@
         if (f.evidence && f.evidence.length) {
           evidenceHtml = '<ul class="mt-3 space-y-1">';
           f.evidence.slice(0, 5).forEach(function (e) {
-            var line = e.ip || "";
-            if (e.endpoint) line += " → " + e.endpoint;
-            if (e.count)    line += " (" + e.count + " requests)";
-            if (e.path)     line += " [" + e.path + "]";
-            evidenceHtml += '<li class="font-mono text-xs text-slate-500 dark:text-slate-400">' + escapeHtml(line) + "</li>";
+            evidenceHtml += '<li class="break-all font-mono text-xs text-slate-500 dark:text-slate-400">' +
+              escapeHtml(securityEvidenceLine(e)) + "</li>";
           });
           if (f.evidence.length > 5) evidenceHtml += '<li class="text-xs text-slate-400">…and ' + (f.evidence.length - 5) + ' more</li>';
           evidenceHtml += '</ul>';
         }
 
+        var badge = sourceBadges[f.source];
+        var badgeHtml = badge
+          ? ' <span class="ml-2 rounded-full px-2 py-0.5 align-middle text-xs font-medium ' + badge[1] + '">' + badge[0] + "</span>"
+          : "";
+
         card.innerHTML =
           '<div class="flex items-start gap-3">' +
             '<span class="mt-1 h-2.5 w-2.5 shrink-0 rounded-full ' + dotClass + '"></span>' +
             '<div class="min-w-0 flex-1">' +
-              '<p class="font-semibold text-slate-800 dark:text-slate-200">' + escapeHtml(f.title || f.type) + '</p>' +
+              '<p class="font-semibold text-slate-800 dark:text-slate-200">' + escapeHtml(f.title || f.type) + badgeHtml + '</p>' +
               '<p class="mt-1 text-sm text-slate-600 dark:text-slate-400">' + escapeHtml(f.description || "") + '</p>' +
               evidenceHtml +
             '</div>' +
           '</div>';
         findingsEl.appendChild(card);
       });
+    }
+  }
+
+  // One evidence row, whichever kind of finding it belongs to.
+  function securityEvidenceLine(e) {
+    var parts = [];
+    if (e.ip) parts.push(e.ip);
+    if (e.endpoint) parts.push(e.endpoint);
+    var line = parts.join(" → ");
+    var details = [];
+    if (e.request_count != null) details.push(Number(e.request_count).toLocaleString() + " request" + (e.request_count === 1 ? "" : "s"));
+    if (e.confidence != null)    details.push(Math.round(e.confidence * 100) + "% confidence");
+    if (e.distinct_paths != null) details.push(e.distinct_paths + " different paths");
+    if (e.error_count != null)   details.push(Number(e.error_count).toLocaleString() + " errors");
+    if (e.status_code != null)   details.push("status " + e.status_code);
+    if (Array.isArray(e.reasons)) details.push(e.reasons.join(" + "));
+    return details.length ? line + "  (" + details.join(", ") + ")" : line;
+  }
+
+  // Per-class breakdown of what the request classifier found.
+  function renderSecurityClassification(c) {
+    var card  = $("#security-classification");
+    var rows  = $("#security-classification-rows");
+    var desc  = $("#security-classification-desc");
+    var model = $("#security-classification-model");
+    if (!card || !rows) return;
+    if (!c) { card.classList.add("hidden"); return; }
+
+    card.classList.remove("hidden");
+    rows.innerHTML = "";
+
+    if (!c.available) {
+      if (desc)  desc.textContent = c.note || "The request classifier is not available.";
+      if (model) model.textContent = "Only the behaviour rules were used for this report.";
+      return;
+    }
+
+    if (desc) {
+      desc.textContent =
+        "Read " + Number(c.requests_analysed).toLocaleString() + " requests (" +
+        Number(c.distinct_urls).toLocaleString() + " different URLs) and labelled " +
+        Number(c.flagged_requests).toLocaleString() + " of them (" + c.flagged_share + "%) as attacks." +
+        (c.note ? " " + c.note : "");
+    }
+
+    var largest = Math.max.apply(null, (c.classes || []).map(function (k) { return k.requests; }).concat([1]));
+    (c.classes || []).forEach(function (k) {
+      var width = k.requests ? Math.max(2, Math.round(k.requests / largest * 100)) : 0;
+      var barColor = k.severity === "high" ? "bg-red-500" : "bg-amber-400";
+      var row = document.createElement("div");
+      row.innerHTML =
+        '<div class="flex items-baseline justify-between gap-3 text-sm">' +
+          '<span class="font-medium text-slate-700 dark:text-slate-300">' + escapeHtml(k.label) + "</span>" +
+          '<span class="tabular-nums text-slate-500 dark:text-slate-400">' +
+            (k.requests
+              ? Number(k.requests).toLocaleString() + " requests · " + Number(k.unique_ips).toLocaleString() + " clients"
+              : "none found") +
+          "</span>" +
+        "</div>" +
+        '<div class="mt-1 h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">' +
+          '<div class="h-full rounded-full ' + barColor + '" style="width:' + width + '%"></div>' +
+        "</div>";
+      rows.appendChild(row);
+    });
+
+    if (model) {
+      var m = c.model || {};
+      var bits = [m.algorithm || "Machine-learning classifier"];
+      if (m.training_examples) bits.push("trained on " + Number(m.training_examples).toLocaleString() + " labelled examples");
+      if (m.holdout_accuracy != null) bits.push((m.holdout_accuracy * 100).toFixed(1) + "% accuracy on attack patterns held out of training");
+      bits.push("reports a request only when at least " + Math.round((c.threshold || 0.7) * 100) + "% confident");
+      model.textContent = bits.join(" · ");
     }
   }
 

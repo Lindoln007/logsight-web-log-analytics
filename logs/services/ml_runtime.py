@@ -35,3 +35,11 @@ def _import_ml_stack() -> None:
         import sklearn.ensemble  # noqa: F401
     except Exception:  # missing or broken install: the services fall back gracefully
         logger.warning("scikit-learn could not be imported; ML features will fall back.")
+        return
+
+    # Also load the trained security classifier so Security Insights is ready.
+    from logs.ml.security_model import load_model
+
+    _model, error = load_model()
+    if error:
+        logger.warning("Security classifier unavailable: %s", error)

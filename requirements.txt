@@ -4,4 +4,6 @@ dj-database-url>=1.0.0
 python-dotenv>=1.0
 gunicorn>=21.0
 whitenoise>=6.0
-scikit-learn>=1.8
+# Pinned: logs/ml/security_classifier.joblib was trained with this version.
+# After changing it, re-run: python manage.py train_security_classifier
+scikit-learn==1.9.1

@@ -112,7 +112,8 @@ logsight/
 │       ├── ml_runtime.py          # Background warm-up of scikit-learn
 │       ├── alerts.py              # Auto health check, persistent Alert records, history
 │       ├── reports.py             # CSV and JSON report generation
-│       ├── security.py            # Brute-force, scanner, sensitive-path, error-concentration
+│       ├── security.py            # Behaviour rules + blending with the ML classifier
+│       ├── security_classification.py  # Runs the trained request classifier over a dataset
 │       ├── comparison.py          # Side-by-side dataset analytics
 │       ├── notifications.py       # Create, list, mark-read, email dispatch
 │       ├── simulator.py           # Synthetic log generation, error/traffic spike injection
@@ -537,26 +538,67 @@ Alert emails are sent to `LOGSIGHT_ALERT_EMAIL` (default: `mbayaasante@gmail.com
 ## 17. Security Insights
 
 **Route:** `#/security` → `GET /logs/datasets/<id>/security/`  
-**File:** `logs/services/security.py`
+**Files:** `logs/services/security.py`, `logs/services/security_classification.py`, `logs/ml/`
 
-Analyses log data for suspicious patterns. Every finding is derived directly from the actual log entries — no predefined rules or signatures.
+One report built from two complementary kinds of analysis. Behaviour rules count what each client did across many requests; a machine-learning classifier reads the content of each request. A brute-force attack uses ordinary URLs, so only the rules catch it; a single injection attempt leaves no behavioural trace, so only the classifier catches it.
 
-### Checks
+### Behaviour rules (`source: "rule"`)
 
 | Check | Detection method | Severity |
 |---|---|---|
 | **Brute force** | IPs with ≥ 20 failed (4xx) requests to the same endpoint | High |
-| **Path scanning** | IPs that hit ≥ 15 distinct unique endpoints | Medium |
+| **Path scanning** | IPs that requested ≥ 15 distinct endpoints and received errors for at least half of their requests | Medium |
 | **Sensitive path access** | Requests to `.env`, `admin`, `wp-login`, `phpmyadmin`, `.git`, `passwd`, `shell`, `setup.php`, `wp-admin`, `config` | High |
 | **High error concentration** | IPs responsible for ≥ 100 error responses (4xx/5xx) | Medium |
+
+### Security-event classification (`source: "ai"`)
+
+A trained scikit-learn pipeline — **TF-IDF over character n-grams (1–4) → Logistic Regression** — labels every request target (path + query string) as one of:
+
+| Class | Severity |
+|---|---|
+| Normal request | — |
+| SQL injection | High |
+| Cross-site scripting (XSS) | High |
+| Path traversal / file inclusion | High |
+| Command / code injection | High |
+| Scanner / reconnaissance probe | Medium |
+
+Before classification each URL is normalised (`normalise_request`): URL-decoded twice, lower-cased, digit runs replaced by `0`, whitespace collapsed. The model runs once per *distinct* URL and request counts are carried along. A request is reported only when the model is at least 70% confident. Flagged URLs are traced back to client addresses, and each class becomes a finding card with request count, client count, how many requests were answered successfully, and example URLs with confidence.
+
+Unlike the anomaly and forecasting models, this one is trained ahead of time and loaded from `logs/ml/security_classifier.joblib`. If the file is missing or cannot be loaded, the report still runs with the behaviour rules only and says so.
+
+#### Training
+
+```
+python manage.py train_security_classifier
+python manage.py train_security_classifier --harvest-benign access.log other.log
+python manage.py train_security_classifier --extra-data labelled.csv
+```
+
+| Source | What it provides |
+|---|---|
+| `logs/ml/security_corpus.py` | Attack examples generated from well-known payload patterns, varied by path, parameter, letter case, spacing and URL-encoding; plus generated everyday URLs |
+| `logs/ml/data/benign_urls.txt` | Real normal URLs harvested from access logs: served successfully to ≥ 3 different clients, excluding any a first-pass model is ≥ 90% sure is an attack |
+| `--extra-data` | Optional CSV (`text,label`) for mixing in a public labelled dataset |
+
+The command prints a hold-out evaluation in which 25% of the *patterns* (not just rows) are kept out of training, so the score reflects payloads the model has never seen. The summary is saved to `logs/ml/security_classifier.json`. `scikit-learn` is pinned in `requirements.txt` to the version the model file was trained with; retrain after changing it.
+
+### Repeat offenders (`source: "combined"`)
+
+Clients that appear in two or more different findings — for example path scanning (rule) plus path traversal (AI) — are listed as a separate high-severity finding with the reasons for each.
 
 ### Risk score
 
 `min(100, sum of weights for active findings)`:
-- Brute force: 30
-- Sensitive path: 25
-- High error concentration: 25
-- Path scanning: 20
+
+| Finding | Weight |
+|---|---|
+| Brute force, SQL injection, Command injection | 20 each |
+| Path traversal | 15 |
+| Path scanning, Sensitive path, High error concentration, XSS, Scanner probe, Repeat offenders | 10 each |
+
+An AI class counts at half weight while it has fewer than 5 requests behind it.
 
 ### Output
 

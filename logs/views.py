@@ -824,8 +824,10 @@ def security_insights_view(request: HttpRequest, dataset_id: int) -> JsonRespons
     """
     GET /logs/datasets/<id>/security/
 
-    Run security checks (brute force, path scanning, sensitive paths,
-    high error concentration) and return findings + risk score.
+    Run the behaviour rules (brute force, path scanning, sensitive paths,
+    high error concentration) and the machine-learning request classifier
+    (SQL injection, XSS, path traversal, command injection, scanner probes),
+    and return the combined findings + risk score.
     """
     dataset = _get_user_dataset(request, dataset_id)
     error = _dataset_ready_or_error(dataset)

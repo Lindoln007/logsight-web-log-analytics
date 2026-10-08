@@ -75,7 +75,7 @@
               <button type="button" class="top-nav-link" aria-haspopup="true">Monitoring</button>
               <div class="nav-dropdown">
                 <a href="{% url 'coming-soon' %}?module=alerts" data-coming-soon="alerts">Alerts<span>Health checks and thresholds</span></a>
-                <a href="{% url 'coming-soon' %}?module=security-insights" data-coming-soon="security-insights">Security Insights<span>Threats and anomalous IPs</span></a>
+                <a href="#/security" data-route="security">Security Insights<span>Attack detection and risky IPs</span></a>
                 <a href="{% url 'coming-soon' %}?module=live-ingestion" data-coming-soon="live-ingestion">Live Ingestion<span>Simulate real-time log data</span></a>
               </div>
             </div>
@@ -135,7 +135,7 @@
           <a href="#/reports" data-route="reports">Reports</a>
           <p>Monitoring</p>
           <a href="{% url 'coming-soon' %}?module=alerts" data-coming-soon="alerts">Alerts</a>
-          <a href="{% url 'coming-soon' %}?module=security-insights" data-coming-soon="security-insights">Security Insights</a>
+          <a href="#/security" data-route="security">Security Insights</a>
           <a href="{% url 'coming-soon' %}?module=live-ingestion" data-coming-soon="live-ingestion">Live Ingestion</a>
           <p id="mobile-admin-label" class="hidden">Admin</p>
           <a id="mobile-admin-users" href="{% url 'coming-soon' %}?module=user-management" data-coming-soon="user-management" class="hidden">User Management</a>
@@ -723,7 +723,7 @@
           <!-- Security Insights                                            -->
           <!-- ============================================================ -->
           <section data-view="security" class="hidden space-y-6">
-            <p class="text-sm text-slate-600 dark:text-slate-400">Analyses your log data for suspicious patterns — no predefined rules, every finding is derived directly from the data.</p>
+            <p class="text-sm text-slate-600 dark:text-slate-400">Combines two kinds of analysis in one report: behaviour rules that count what each client did (brute force, scanning, error bursts), and an AI classifier that reads every request and recognises attack payloads such as SQL injection, XSS and path traversal.</p>
             <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
                 Dataset
@@ -742,6 +742,15 @@
                 <p id="security-summary" class="text-sm font-medium text-slate-700 dark:text-slate-300"></p>
                 <span id="security-score-badge" class="rounded-full px-3 py-1 text-sm font-bold"></span>
               </div>
+            </div>
+            <!-- AI request classification breakdown -->
+            <div id="security-classification" class="hidden rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900/60">
+              <div class="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+                <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">AI request classification</h3>
+                <p id="security-classification-desc" class="mt-1 text-sm text-slate-500 dark:text-slate-400"></p>
+              </div>
+              <div id="security-classification-rows" class="space-y-3 px-5 py-4"></div>
+              <p id="security-classification-model" class="border-t border-slate-200 px-5 py-3 text-xs text-slate-500 dark:border-slate-800 dark:text-slate-400"></p>
             </div>
             <!-- Findings list -->
             <div id="security-findings" class="space-y-4"></div>
@@ -1062,8 +1071,8 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-    <script src="js/api.js?v=20261008-v6"></script>
-    <script src="js/charts.js?v=20261008-v6b"></script>
-    <script src="js/app.js?v=20261008-v6"></script>
+    <script src="js/api.js?v=20261008-v7"></script>
+    <script src="js/charts.js?v=20261008-v7"></script>
+    <script src="js/app.js?v=20261008-v7"></script>
   </body>
 </html>
