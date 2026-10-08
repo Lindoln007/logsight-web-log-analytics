@@ -1,14 +1,35 @@
 from django import forms
 from django.contrib.auth import get_user_model
-from django.contrib.auth.forms import AuthenticationForm, UserCreationForm
+from django.contrib.auth.forms import (
+    AuthenticationForm,
+    PasswordResetForm,
+    SetPasswordForm,
+    UserCreationForm,
+)
 
 
 User = get_user_model()
-INPUT_CLASSES = (
-    "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm "
-    "text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 "
-    "focus:ring-indigo-500/20"
-)
+# Classes from the LogSight design system (frontend/css/logsight.css).
+INPUT_CLASSES = "input input-lg"
+
+
+class StyledPasswordResetForm(PasswordResetForm):
+    """Password-recovery request form using the LogSight input styles."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["email"].widget.attrs.update(
+            {"class": INPUT_CLASSES, "placeholder": "you@example.com", "autofocus": True}
+        )
+
+
+class StyledSetPasswordForm(SetPasswordForm):
+    """New-password form using the LogSight input styles."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field in self.fields.values():
+            field.widget.attrs["class"] = INPUT_CLASSES
 
 
 class LoginForm(AuthenticationForm):

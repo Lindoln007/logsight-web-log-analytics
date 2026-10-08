@@ -39,6 +39,8 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    # Compress JSON and HTML responses (chart series are large but repetitive).
+    'django.middleware.gzip.GZipMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -247,12 +249,30 @@ DATA_UPLOAD_MAX_MEMORY_SIZE = 4 * 1024 * 1024   # 4 MB
 #
 # LocMemCache is per-process and does not share across workers, but it is
 # sufficient for development and single-worker deployments.
-CACHES = {
-    "default": {
-        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-        "LOCATION": "logsight-analytics",
+# Analytics results are cached on disk rather than in process memory: they
+# survive a server restart and are shared by every worker.  The key prefix is
+# tied to the database so switching databases never serves another one's data.
+import hashlib
+import sys
+
+_RUNNING_TESTS = len(sys.argv) > 1 and sys.argv[1] == "test"
+if _RUNNING_TESTS:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "logsight-tests",
+        }
     }
-}
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+            "LOCATION": os.getenv("LOGSIGHT_CACHE_DIR", str(BASE_DIR / ".cache")),
+            "TIMEOUT": 60 * 60 * 24 * 7,
+            "KEY_PREFIX": hashlib.md5(str(DATABASES["default"].get("NAME", "")).encode()).hexdigest()[:8],
+            "OPTIONS": {"MAX_ENTRIES": 20_000},
+        }
+    }
 
 # ---------------------------------------------------------------------------
 # Logging

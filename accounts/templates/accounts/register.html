@@ -1,132 +1,65 @@
 {% extends "accounts/base.html" %}
-{% block title %}{% if invite_valid %}Create account | LogSight{% else %}LogSight — By Invitation Only{% endif %}{% endblock %}
+{% block title %}Create account · LogSight{% endblock %}
 
 {% block content %}
-<style>
-  .ls-invite-badge {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    border-radius: 12px;
-    padding: 12px 14px;
-    background: rgba(15, 127, 156, 0.07);
-    border: 1px solid rgba(15, 127, 156, 0.18);
-    margin: 22px 0 20px;
-  }
-  .ls-invite-dot {
-    width: 8px; height: 8px; border-radius: 50%;
-    background: var(--ls-accent); flex-shrink: 0;
-  }
-  .ls-gate-icon {
-    width: 48px; height: 48px; border-radius: 14px;
-    background: rgba(153, 91, 0, 0.08);
-    border: 1px solid rgba(153, 91, 0, 0.18);
-    display: flex; align-items: center; justify-content: center;
-    margin: 0 auto 14px;
-  }
-</style>
-
-{% if invite_invalid %}
-
-  <div class="text-center">
-    <div class="ls-gate-icon">
-      <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"
-           stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"
-           style="color: var(--ls-warn);">
-        <rect x="3" y="11" width="18" height="11" rx="2"/>
-        <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-      </svg>
-    </div>
-    <h1 class="login-heading">
-      Invite code not valid
-    </h1>
-    <p class="login-subheading">
-      That invite code is expired or invalid.
-      You can still create a new account below, or ask an admin for a fresh invite.
+  <div>
+    <p class="kicker">{% if invite %}Invitation accepted{% else %}Get started{% endif %}</p>
+    <h1 class="auth-title">Create your account</h1>
+    <p class="auth-text">
+      {% if invite %}Finish registering to join the workspace you were invited to.
+      {% else %}You will be the administrator of your own workspace and can upload logs straight away.{% endif %}
     </p>
-    <a href="{% url 'accounts:login' %}"
-       class="mt-6 inline-flex rounded-xl px-4 py-2 text-sm font-semibold"
-       style="color: var(--ls-accent); text-decoration: none;">
-      Back to login
-    </a>
   </div>
 
-{% endif %}
-
-  <!-- Registration form -->
-  <div>
-
-    <div>
-      <h1 class="login-heading">
-        Create your account
-      </h1>
-      <p class="login-subheading">
-        {% if invite %}
-          Finish your invited registration to access the analytics workspace.
-        {% else %}
-          Create your own LogSight account and manage your workspace as an admin.
-        {% endif %}
-      </p>
+  {% if invite_invalid %}
+    <div class="notice notice-warn" role="alert">
+      <svg class="icon"><use href="#i-alert" /></svg>
+      <span><b>That invite code is expired or not valid.</b> You can still create your own account below, or ask an administrator for a new invite.</span>
     </div>
+  {% endif %}
 
-    {% if invite %}
-      <!-- Invite badge -->
-      <div class="ls-invite-badge">
-        <span class="ls-invite-dot"></span>
-        <div>
-          <p class="text-xs font-semibold" style="color: var(--ls-accent);">
-            Invited by {{ invite.invited_by.username }}
-          </p>
-          <p class="mt-0.5 text-xs" style="color: var(--ls-muted);">
-            You'll join as <strong style="color: var(--ls-text);">{{ invite.role|capfirst }}</strong>{% if invite.email %}&nbsp;·&nbsp; {{ invite.email }}{% endif %}
-          </p>
-        </div>
+  {% if invite %}
+    <div class="invite-card">
+      <b>Invited by {{ invite.invited_by.username }}</b>
+      <span>You will join as {{ invite.role|capfirst }}{% if invite.email %} using {{ invite.email }}{% endif %}.</span>
+    </div>
+  {% endif %}
+
+  <form method="post" class="auth-form" data-busy novalidate>
+    {% csrf_token %}
+    <input type="hidden" name="invite_token" value="{{ token_str }}" />
+
+    {% if form.non_field_errors %}
+      <div class="notice notice-bad" role="alert">
+        <svg class="icon"><use href="#i-alert" /></svg>
+        <span>{% for error in form.non_field_errors %}{{ error }} {% endfor %}</span>
       </div>
     {% endif %}
 
-    <form method="post" class="mt-5 flex flex-col gap-5">
-      {% csrf_token %}
-      <input type="hidden" name="invite_token" value="{{ token_str }}" />
-
-      {% if form.non_field_errors %}
-        <div class="auth-error">
-          {% for error in form.non_field_errors %}<span>{{ error }}</span>{% endfor %}
-        </div>
-      {% endif %}
-
-      {% for field in form %}
-        <div>
-          <label for="{{ field.id_for_label }}"
-                 class="field-label">
-            {{ field.label }}
-          </label>
+    {% for field in form %}
+      <div class="field {% if field.errors %}has-error{% endif %}">
+        <label class="label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+        {% if field.field.widget.input_type == "password" %}
+          <div class="password-wrap">
+            {{ field }}
+            <button type="button" class="password-toggle" data-password-toggle="{{ field.id_for_label }}" aria-pressed="false">Show</button>
+          </div>
+        {% else %}
           {{ field }}
-          {% if field.help_text %}
-            <div class="field-help">{{ field.help_text|safe }}</div>
-          {% endif %}
-          {% if field.errors %}
-            <p class="field-error">{{ field.errors|join:", " }}</p>
-          {% endif %}
-        </div>
-      {% endfor %}
+        {% endif %}
+        {% if field.errors %}
+          <p class="field-error"><svg class="icon icon-sm"><use href="#i-alert" /></svg><span>{{ field.errors|join:" " }}</span></p>
+        {% elif field.help_text %}
+          <div class="help">{{ field.help_text|safe }}</div>
+        {% endif %}
+      </div>
+    {% endfor %}
 
-      <button type="submit"
-              class="login-btn">
-        Create account
-      </button>
-    </form>
+    <button type="submit" class="btn btn-primary btn-lg btn-block">Create account</button>
+  </form>
 
-    <div class="login-footer">
-      <span style="color: var(--ls-muted);">Already have an account?</span>
-      <a href="{% url 'accounts:login' %}" class="ml-1.5 font-semibold"
-         style="color: var(--ls-accent);">Sign in</a>
-    </div>
-
-    <div style="margin-top: 20px; text-align:center;">
-      <span style="color: var(--ls-muted);">Have an invite code?</span>
-      <a href="{% url 'accounts:redeem' %}" style="color: var(--ls-accent); font-weight: 600;">Enter it here</a>
-    </div>
-
+  <div class="auth-links">
+    <span>Already registered? <a href="{% url 'accounts:login' %}">Sign in</a></span>
+    {% if not invite %}<span>Have an invite code? <a href="{% url 'accounts:redeem' %}">Use it to join a team</a></span>{% endif %}
   </div>
-
 {% endblock %}

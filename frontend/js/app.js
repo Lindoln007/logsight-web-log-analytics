@@ -1,2677 +1,1404 @@
 /**
- * LogSight SPA — routing, top navigation, uploads, datasets,
- * dashboard, log viewer, forecasting, anomaly detection, alerts, reports.
+ * LogSight application shell.
+ *
+ * One working dataset is chosen in the sidebar and every page reads from it.
+ * Each page ("view") has a loader that fetches what it needs, writes the
+ * finding as a sentence, then draws the supporting evidence.
  */
 (function () {
   "use strict";
 
-  var PREFS_KEY    = "log-sight-prefs";           // localStorage fallback for preferences
-  var routes       = ["dashboard", "upload", "datasets", "viewer",
-                      "forecast", "anomalies", "alerts", "reports",
-                      "security", "compare", "search", "simulate", "users"];
-  var unavailableRoutes = {
-    alerts: "alerts",
-    simulate: "live-ingestion",
-    users: "user-management",
+  var API = window.LogSightAPI;
+  var Charts = window.LogSightCharts;
+  var ROLE = window.LOGSIGHT_USER_ROLE || "viewer";
+  var CAN_EDIT = ROLE === "admin" || ROLE === "analyst";
+  var REDUCED = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  var ROUTES = ["overview", "datasets", "explore", "forecast", "anomalies", "security", "compare", "reports"];
+  var ALIASES = { dashboard: "overview", upload: "datasets", viewer: "explore", search: "explore" };
+  var STORE = { active: "logsight.activeDataset", hidden: "logsight.hiddenSections", saved: "logsight.savedFilters" };
+
+  var state = {
+    datasets: [],
+    active: null,          // normalised dataset object
+    summary: null,         // summary for the active dataset
+    route: "overview",
+    runs: {},              // per-view counters that discard stale responses
+    loaded: {},            // per-view signature of what is currently rendered
+    range: { from: "", to: "" },
+    interval: null,
+    hidden: [],
+    ex: { q: "", status: "all", method: "", ip: "", endpoint: "", from: "", to: "", page: 1 },
+    fc: { method: "ml", periods: 24 },
+    an: { method: "isolation_forest", sensitivity: "medium", filter: "all", data: null },
+    polling: null,
   };
 
-  var viewerPage             = 1;
-  var viewerSearchDebounce;
-  var pendingViewerDatasetId = "";
-  var dashboardReady         = false;
-
-  // -------------------------------------------------------------------------
-  // DOM helpers
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Small helpers
+  // ---------------------------------------------------------------------------
 
   function $(sel, root) { return (root || document).querySelector(sel); }
-  function $all(sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
+  function $$(sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
 
-  function escapeHtml(value) {
-    var div = document.createElement("div");
-    div.textContent = value == null ? "" : String(value);
-    return div.innerHTML;
+  function esc(value) {
+    return String(value == null ? "" : value)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+  function icon(name, cls) { return '<svg class="icon ' + (cls || "") + '" aria-hidden="true"><use href="#i-' + name + '"/></svg>'; }
+  function num(value) { return value == null || isNaN(value) ? "—" : Math.round(Number(value)).toLocaleString("en"); }
+  function pct(value, digits) { return value == null || isNaN(value) ? "—" : Number(value).toFixed(digits == null ? 1 : digits) + "%"; }
+  function plural(n, one, many) { return Number(n) === 1 ? one : (many || one + "s"); }
+
+  function bytes(value) {
+    if (value == null || isNaN(value)) return "—";
+    var v = Number(value), units = ["B", "KB", "MB", "GB"], i = 0;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+    return (i === 0 ? Math.round(v) : v.toFixed(v < 10 ? 1 : 0)) + " " + units[i];
   }
 
-  function formatBytes(value) {
-    var n = Number(value || 0);
-    if (n < 1024) return n + " B";
-    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
-    if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(2) + " MB";
-    return (n / (1024 * 1024 * 1024)).toFixed(2) + " GB";
-  }
-
-  function formatDate(iso) {
+  // All log timestamps are shown in UTC so they match the server-side labels.
+  var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function pad(n) { return String(n).padStart(2, "0"); }
+  function utc(iso, style) {
     if (!iso) return "—";
-    try { return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }); }
-    catch (_) { return iso; }
+    var d = new Date(iso);
+    if (isNaN(d)) return "—";
+    var day = MONTHS[d.getUTCMonth()] + " " + d.getUTCDate();
+    var time = pad(d.getUTCHours()) + ":" + pad(d.getUTCMinutes());
+    if (style === "day") return day;
+    if (style === "date") return day + ", " + d.getUTCFullYear();
+    if (style === "seconds") return day + " " + time + ":" + pad(d.getUTCSeconds());
+    return day + " " + time;
+  }
+  function period(range) {
+    if (!range || !range.start) return "";
+    var a = new Date(range.start), b = new Date(range.end || range.start);
+    var sameYear = a.getUTCFullYear() === b.getUTCFullYear();
+    if (utc(range.start, "date") === utc(range.end, "date")) return utc(range.start, "date");
+    return (sameYear ? utc(range.start, "day") : utc(range.start, "date")) + " – " + utc(range.end, "date");
+  }
+  function localDate(iso) {
+    if (!iso) return "—";
+    try { return new Date(iso).toLocaleDateString("en", { day: "numeric", month: "short", year: "numeric" }); } catch (_) { return "—"; }
+  }
+  function ago(iso) {
+    var s = (Date.now() - new Date(iso).getTime()) / 1000;
+    if (isNaN(s)) return "";
+    if (s < 60) return "just now";
+    if (s < 3600) return Math.floor(s / 60) + " min ago";
+    if (s < 86400) return Math.floor(s / 3600) + " h ago";
+    return localDate(iso);
   }
 
-  function formatNumber(value) {
-    if (value == null) return null;
-    return Number(value).toLocaleString();
+  function load(key, fallback) { try { var v = JSON.parse(localStorage.getItem(key)); return v == null ? fallback : v; } catch (_) { return fallback; } }
+  function save(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) {} }
+
+  /** Returns a function that is true only while this is the newest run of *view*. */
+  function guard(view) {
+    var run = (state.runs[view] = (state.runs[view] || 0) + 1);
+    var id = state.active && state.active.id;
+    return function () { return state.runs[view] === run && (state.active && state.active.id) === id; };
   }
 
-  function renderStatValue(id, value, suffix, fallback) {
+  function skeleton(lines, cls) {
+    var widths = ["96%", "88%", "62%", "80%"], html = "";
+    for (var i = 0; i < lines; i++) html += '<span class="skeleton ' + (cls || "skeleton-line") + '" style="width:' + widths[i % widths.length] + '">&nbsp;</span>';
+    return html;
+  }
+
+  /** Animate a number from zero so the eye lands on it as the page settles. */
+  function countUp(el, value, format) {
+    if (!el) return;
+    format = format || num;
+    if (value == null || isNaN(value)) { el.textContent = "—"; return; }
+    if (REDUCED || document.hidden) { el.innerHTML = format(value); return; }
+    var start = performance.now(), duration = 800;
+    (function frame(now) {
+      var t = Math.min(1, (now - start) / duration);
+      el.innerHTML = format(value * (1 - Math.pow(2, -10 * t)) / (1 - Math.pow(2, -10)));
+      if (t < 1) requestAnimationFrame(frame); else el.innerHTML = format(value);
+    })(start);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Feedback: toasts and the route progress line
+  // ---------------------------------------------------------------------------
+
+  function toast(message, kind, html) {
+    var host = $("#toasts");
+    if (!host) return;
+    var el = document.createElement("div");
+    el.className = "toast" + (kind ? " toast-" + kind : "");
+    el.innerHTML = icon(kind === "bad" ? "alert" : kind === "good" ? "check" : "info") +
+      "<span>" + (html ? message : esc(message)) + "</span>" +
+      '<button type="button" aria-label="Dismiss">' + icon("x", "icon-sm") + "</button>";
+    var close = function () {
+      if (el.classList.contains("is-leaving")) return;
+      el.classList.add("is-leaving");
+      setTimeout(function () { el.remove(); }, 240);
+    };
+    $("button", el).addEventListener("click", close);
+    host.appendChild(el);
+    setTimeout(close, kind === "bad" ? 8000 : 5000);
+  }
+
+  var busyCount = 0;
+  function busy(promise) {
+    var bar = $("#route-progress");
+    if (++busyCount === 1 && bar) { bar.className = "route-progress"; void bar.offsetWidth; bar.classList.add("is-running"); }
+    var done = function () {
+      if (--busyCount === 0 && bar) { bar.classList.remove("is-running"); bar.classList.add("is-done"); }
+    };
+    promise.then(done, done);
+    return promise;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Segmented controls and popovers
+  // ---------------------------------------------------------------------------
+
+  function syncSegmented(el) {
+    var on = $('button[aria-pressed="true"]', el);
+    if (!on || !el.offsetParent) return;
+    el.style.setProperty("--thumb-x", on.offsetLeft + "px");
+    el.style.setProperty("--thumb-w", on.offsetWidth + "px");
+  }
+  function setSegmented(el, value) {
+    $$("button", el).forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.value === String(value))); });
+    syncSegmented(el);
+  }
+  function initSegmented(id, onChange) {
     var el = $("#" + id);
     if (!el) return;
-    if (value == null || value === "") { el.textContent = fallback || "—"; return; }
-    el.textContent = String(value) + (suffix || "");
+    el.addEventListener("click", function (e) {
+      var b = e.target.closest("button");
+      if (!b || b.getAttribute("aria-pressed") === "true") return;
+      setSegmented(el, b.dataset.value);
+      onChange(b.dataset.value);
+    });
   }
+  function syncAllSegmented() { $$(".segmented").forEach(syncSegmented); }
 
-  function renderSubText(id, text) {
-    var el = $("#" + id);
-    if (el) el.textContent = text || "";
+  var openPopover = null;
+  function closePopover() {
+    if (!openPopover) return;
+    openPopover.pop.hidden = true;
+    openPopover.btn.setAttribute("aria-expanded", "false");
+    openPopover = null;
   }
-
-  function setTableMessage(tbody, message, colspan) {
-    if (!tbody) return;
-    tbody.innerHTML =
-      '<tr><td colspan="' + (colspan || 6) + '" class="px-4 py-8 text-center text-slate-500 dark:text-slate-400">' +
-      escapeHtml(message) + "</td></tr>";
+  function bindPopover(btn, pop, onOpen) {
+    if (!btn || !pop) return;
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var wasOpen = openPopover && openPopover.pop === pop;
+      closePopover();
+      if (wasOpen) return;
+      pop.hidden = false;
+      btn.setAttribute("aria-expanded", "true");
+      openPopover = { btn: btn, pop: pop };
+      if (onOpen) onOpen();
+    });
+    pop.addEventListener("click", function (e) { e.stopPropagation(); });
   }
-
-  function buildStatusBadge(status) {
-    var v = String(status || "pending").toLowerCase();
-    if (v === "completed")  return "border border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-300";
-    if (v === "failed")     return "border border-red-200 bg-red-50 text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300";
-    if (v === "processing") return "border border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300";
-    return "border border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300";
-  }
-
-  function severityBadge(sev) {
-    if (sev === "high")   return "border border-red-200 bg-red-50 text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300";
-    if (sev === "medium") return "border border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300";
-    return "border border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400";
-  }
-
-  // Convert an ISO timestamp to the value expected by <input type="datetime-local">
-  // Format: YYYY-MM-DDTHH:MM
-  function isoToDatetimeLocal(iso) {
-    if (!iso) return "";
-    try {
-      var d = new Date(iso);
-      var pad = function (n) { return String(n).padStart(2, "0"); };
-      return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) +
-        "T" + pad(d.getHours()) + ":" + pad(d.getMinutes());
-    } catch (_) { return ""; }
-  }
-
-  // -------------------------------------------------------------------------
-  // Theme
-  // -------------------------------------------------------------------------
-
-  function initTheme() {
-    localStorage.setItem("log-sight-theme", "light");
-    applyTheme(false);
-  }
-
-  function applyTheme(dark) {
-    document.documentElement.classList.remove("dark");
-    var meta = $("#theme-color-meta");
-    if (meta) meta.setAttribute("content", "#eef2f5");
-  }
-
-  // -------------------------------------------------------------------------
-  // Top navigation
-  // -------------------------------------------------------------------------
-
-  function initTopNavigation() {
-    var nav = $(".top-nav");
-    var bubble = $("#nav-hover-bubble");
-    var mobileBtn = $("#mobile-nav-toggle");
-    var mobilePanel = $("#mobile-nav-panel");
-
-    function moveBubble(target) {
-      if (!nav || !bubble || !target) return;
-      var navBox = nav.getBoundingClientRect();
-      var box = target.getBoundingClientRect();
-      bubble.style.left = (box.left - navBox.left) + "px";
-      bubble.style.width = box.width + "px";
-      bubble.style.opacity = "1";
+  document.addEventListener("click", closePopover);
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") {
+      if (openPopover) { var b = openPopover.btn; closePopover(); b.focus(); }
+      $("#shell").classList.remove("nav-open");
     }
+  });
 
-    if (nav && bubble) {
-      $all("[data-nav-item]", nav).forEach(function (item) {
-        var target = item.classList.contains("top-nav-group") ? $(".top-nav-link", item) : item;
-        item.addEventListener("mouseenter", function () { moveBubble(target); });
-        item.addEventListener("focusin", function () { moveBubble(target); });
-      });
-      nav.addEventListener("mouseleave", function () {
-        var active = $(".top-nav-link.is-active-route", nav);
-        if (active) moveBubble(active);
-        else bubble.style.opacity = "0";
-      });
-      window.addEventListener("resize", function () {
-        var active = $(".top-nav-link.is-active-route", nav);
-        if (active) moveBubble(active);
-      });
-    }
-
-    function closeMobileNav() {
-      if (mobilePanel) mobilePanel.classList.remove("is-open");
-    }
-
-    if (mobileBtn && mobilePanel) {
-      mobileBtn.addEventListener("click", function () {
-        mobilePanel.classList.toggle("is-open");
-      });
-    }
-
-    function closeDropdowns() {
-      $all(".top-nav-group").forEach(function (group) {
-        group.classList.add("is-closing");
-        setTimeout(function () { group.classList.remove("is-closing"); }, 180);
-      });
-      if (document.activeElement && typeof document.activeElement.blur === "function") {
-        document.activeElement.blur();
-      }
-    }
-
-    window.closeMobileSidebar = closeMobileNav;
-    window.closeTopNavMenus = closeDropdowns;
-    window.refreshNavBubble = function () {
-      var active = $(".top-nav-link.is-active-route", nav);
-      if (active) moveBubble(active);
-    };
-  }
-
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
   // Routing
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
 
-  function getHashRoute() {
-    var value = (window.location.hash || "#/dashboard").replace(/^#\/?/, "").split("/")[0];
-    return routes.indexOf(value) >= 0 ? value : "dashboard";
+  function parseHash() {
+    var name = (location.hash || "").replace(/^#\/?/, "").split(/[/?]/)[0];
+    name = ALIASES[name] || name;
+    return ROUTES.indexOf(name) >= 0 ? name : "overview";
+  }
+  function go(route) {
+    if (parseHash() === route && state.route === route) { showRoute(route); return; }
+    location.hash = "#/" + route;
   }
 
-  function setHashRoute(name) {
-    var next = routes.indexOf(name) >= 0 ? name : "dashboard";
-    if (unavailableRoutes[next]) {
-      goToComingSoon(unavailableRoutes[next]);
-      return;
-    }
-    var hash = "#/" + next;
-    if (window.location.hash === hash) runRoute(next);
-    else window.location.hash = hash;
-  }
+  function showRoute(route) {
+    state.route = route;
+    var target = $('[data-view="' + route + '"]');
+    var needsDataset = target.hasAttribute("data-needs-dataset") && !state.active;
+    var shown = needsDataset ? $("#no-dataset") : target;
 
-  function goToComingSoon(moduleSlug) {
-    window.location.href = "/coming-soon/?module=" + encodeURIComponent(moduleSlug || "feature");
-  }
-
-  function updateNavActive(route) {
-    $all("[data-route]").forEach(function (link) {
-      var active = link.getAttribute("data-route") === route;
-      link.classList.toggle("is-active-route",     active);
-    });
-    var section = "";
-    if (["upload", "datasets", "viewer"].indexOf(route) >= 0) section = "data";
-    if (["forecast", "anomalies", "reports", "compare", "search"].indexOf(route) >= 0) section = "analytics";
-    if (["alerts", "security", "simulate"].indexOf(route) >= 0) section = "monitoring";
-    if (route === "users") section = "admin";
-    $all("[data-nav-section]").forEach(function (group) {
-      var active = group.getAttribute("data-nav-section") === section;
-      var trigger = $(".top-nav-link", group);
-      if (trigger) trigger.classList.toggle("is-active-route", active);
-    });
-    if (typeof window.refreshNavBubble === "function") window.refreshNavBubble();
-  }
-
-  function showView(route) {
-    $all("[data-view]").forEach(function (section) {
-      var on = section.getAttribute("data-view") === route;
-      section.classList.toggle("hidden", !on);
-      if (on) {
-        section.classList.remove("view-enter");
-        void section.offsetWidth;
-        section.classList.add("view-enter");
-      }
-    });
-    var titles = {
-      dashboard: "Dashboard",
-      upload:    "Upload Logs",
-      datasets:  "Datasets",
-      viewer:    "Log Viewer",
-      forecast:  "Traffic Forecasting",
-      anomalies: "Anomaly Detection",
-      alerts:    "Alerts",
-      reports:   "Reports",
-      security:  "Security Insights",
-      compare:   "Dataset Comparison",
-      search:    "Advanced Search",
-      simulate:  "Live Ingestion",
-      users:     "User Management",
+    var swap = function () {
+      $$(".view[data-view], #no-dataset").forEach(function (v) { v.hidden = v !== shown; });
+      shown.classList.remove("is-entering");
+      $$(":scope > *", shown).forEach(function (child, i) { child.style.setProperty("--i", i); });
+      void shown.offsetWidth;
+      shown.classList.add("is-entering");
+      window.scrollTo(0, 0);
+      // Thumbs can only be measured once the view is on screen.
+      syncAllSegmented();
     };
-    var titleEl = $("#page-title");
-    if (titleEl) titleEl.textContent = titles[route] || "Dashboard";
-    var period = $("#stat-period");
-    if (period) period.classList.toggle("hidden", ["viewer", "forecast", "anomalies", "reports", "compare", "security"].indexOf(route) < 0);
-    updateNavActive(route);
+    if (document.startViewTransition && !REDUCED && !document.hidden) {
+      // A transition can be skipped (tab hidden, another one starting); the swap still runs.
+      var transition = document.startViewTransition(swap);
+      transition.ready.catch(function () {});
+      transition.finished.catch(function () {});
+    } else swap();
+
+    // Frame: breadcrumb, nav state, document title.
+    var section = target.dataset.section || "";
+    var title = target.dataset.title || "";
+    $("#crumb-section").textContent = section || title;
+    $("#crumb-page").textContent = section ? title : "";
+    $("#crumb-sep").hidden = !section;
+    document.title = title + " · LogSight";
+    $$(".nav-link").forEach(function (a) {
+      if (a.dataset.route === route) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+    });
+    moveNavMarker();
+    $("#shell").classList.remove("nav-open");
+    $("#menu-btn").setAttribute("aria-expanded", "false");
+    requestAnimationFrame(syncAllSegmented);
+
+    if (needsDataset) return;
+    // A view keeps its rendered result while hidden.  Coming back to it with
+    // the same dataset and settings shows that result at once, with no reload.
+    if (state.loaded[route] === viewKey(route)) return;
+    reload(route);
   }
 
-  function runRoute(route) {
-    if (unavailableRoutes[route]) {
-      window.location.replace("/coming-soon/?module=" + encodeURIComponent(unavailableRoutes[route]));
+  /** Everything a view's content depends on, as one comparable string. */
+  function viewKey(route) {
+    var id = state.active ? state.active.id : "";
+    switch (route) {
+      case "overview": return [id, state.range.from, state.range.to].join("|");
+      case "explore": return id + "|" + JSON.stringify(state.ex);
+      case "forecast": return [id, state.fc.method, state.fc.periods].join("|");
+      case "anomalies": return [id, state.an.method, state.an.sensitivity].join("|");
+      case "datasets": return "";          // always refreshed: statuses change
+      case "compare": return completed().map(function (d) { return d.id; }).join(",") + "|" + id;
+      default: return id;
+    }
+  }
+
+  /** Run a view's loader and remember what it rendered. */
+  function reload(route) {
+    var loader = LOADERS[route];
+    if (!loader) return Promise.resolve();
+    var key = viewKey(route);
+    return busy(Promise.resolve().then(loader).then(function () {
+      state.loaded[route] = route === "datasets" ? null : key;
+    }).catch(function (err) {
+      state.loaded[route] = null;
+      toast(err && err.message ? err.message : "Something went wrong loading this page.", "bad");
+    }));
+  }
+
+  /** Forget every rendered view (after data changes on the server). */
+  function forgetViews() { state.loaded = {}; }
+
+  function moveNavMarker() {
+    var nav = $("#nav"), link = $('.nav-link[aria-current="page"]', nav);
+    if (!link) { nav.style.setProperty("--marker-o", 0); return; }
+    $("#nav-marker").style.height = link.offsetHeight + "px";
+    nav.style.setProperty("--marker-y", link.offsetTop + "px");
+    nav.style.setProperty("--marker-o", 1);
+  }
+
+  window.addEventListener("hashchange", function () { showRoute(parseHash()); });
+  window.addEventListener("resize", function () { moveNavMarker(); syncAllSegmented(); });
+
+  // ---------------------------------------------------------------------------
+  // Working dataset
+  // ---------------------------------------------------------------------------
+
+  function completed() { return state.datasets.filter(function (d) { return d.status === "completed"; }); }
+
+  async function refreshDatasets(force) {
+    if (force) API.invalidate("datasets");
+    state.datasets = await API.listDatasets();
+    var ready = completed();
+    $("#nav-datasets-count").textContent = state.datasets.length ? state.datasets.length : "";
+
+    // Keep the working dataset valid; fall back to the most recent ready one.
+    var wanted = state.active ? state.active.id : load(STORE.active, null);
+    var match = ready.filter(function (d) { return d.id === String(wanted); })[0] || ready[0] || null;
+    if ((match && match.id) !== (state.active && state.active.id)) setActive(match, true);
+    else if (match) { state.active = match; renderSwitcher(); }
+    else renderSwitcher();
+    return state.datasets;
+  }
+
+  function setActive(dataset, silent) {
+    state.active = dataset || null;
+    state.summary = null;
+    state.range = { from: "", to: "" };
+    state.interval = null;
+    state.ex = { q: "", status: "all", method: "", ip: "", endpoint: "", from: "", to: "", page: 1 };
+    API.setCurrentDataset(dataset ? dataset.id : null);
+    save(STORE.active, dataset ? dataset.id : null);
+    renderSwitcher();
+    if (!silent) showRoute(state.route);
+  }
+
+  function renderSwitcher() {
+    var btn = $("#ds-button"), d = state.active;
+    btn.classList.toggle("is-empty", !d);
+    $("#ds-name").textContent = d ? d.name : "No dataset open";
+    $("#ds-meta").textContent = d ? num(d.totalEntries) + " requests" : (state.datasets.length ? "Choose one to begin" : "Upload a log to begin");
+
+    var list = $("#ds-list"), ready = completed();
+    if (!ready.length) {
+      list.innerHTML = '<p class="faint" style="padding:var(--space-sm);font-size:var(--text-sm)">No finished datasets yet.</p>';
       return;
     }
-    showView(route);
-    if (route === "dashboard" && !dashboardReady) loadDashboardData();
-    if (route === "datasets")   loadDatasetsTable();
-    if (route === "viewer")     initLogViewer();
-    if (route === "forecast")   initForecastView();
-    if (route === "anomalies")  initAnomalyView();
-    if (route === "alerts")     initAlertsView();
-    if (route === "reports")    initReportsView();
-    if (route === "security")   initSecurityView();
-    if (route === "compare")    initCompareView();
-    if (route === "search")     initSearchView();
-    if (route === "simulate")   initSimulateView();
-    if (route === "users")      initUsersView();
+    list.innerHTML = ready.map(function (item) {
+      var on = d && d.id === item.id;
+      return '<button type="button" class="ds-option" role="option" aria-selected="' + on + '" data-id="' + esc(item.id) + '">' +
+        '<span><span class="ds-name truncate">' + esc(item.name) + '</span><span class="ds-meta">' + num(item.totalEntries) + " requests · " + esc(localDate(item.uploadedAt)) + "</span></span>" +
+        (on ? icon("check") : "") + "</button>";
+    }).join("");
   }
 
-  function navigate(route) { setHashRoute(route); }
-
-  window.addEventListener("hashchange", function () { runRoute(getHashRoute()); });
-
-  // -------------------------------------------------------------------------
-  // Shared: populate a <select> with completed datasets
-  // -------------------------------------------------------------------------
-
-  async function populateSelect(selectId, includeAll) {
-    var select = $("#" + selectId);
-    if (!select) return [];
-    var current = select.value;
-    var rows    = await LogSightAPI.listDatasets();
-    var completed = rows.filter(function (d) { return d.status === "completed"; });
-    var others    = rows.filter(function (d) { return d.status !== "completed"; });
-
-    select.innerHTML = '<option value="">' + (includeAll ? "— Select dataset —" : "Select…") + "</option>";
-    completed.concat(others).forEach(function (d) {
-      var opt       = document.createElement("option");
-      opt.value     = d.id;
-      opt.textContent = d.name + (d.status !== "completed" ? " (" + d.status + ")" : "");
-      select.appendChild(opt);
-    });
-    if (current && rows.some(function (r) { return r.id === current; })) select.value = current;
-    return rows;
+  async function activeSummary() {
+    if (!state.active) return null;
+    if (state.summary && state.summary.datasetId === state.active.id) return state.summary;
+    var s = await API.getDashboardSummary(state.active.id);
+    if (s.available) state.summary = s;
+    return s;
   }
 
-  // -------------------------------------------------------------------------
-  // Dashboard — dataset selector
-  // -------------------------------------------------------------------------
-
-  async function populateDashboardSelect() {
-    var select = $("#dashboard-dataset");
-    if (!select) return [];
-
-    var current = LogSightAPI.getCurrentDataset() || select.value;
-    var rows    = await LogSightAPI.listDatasets();
-    var completed = rows.filter(function (d) { return d.status === "completed"; });
-    var others    = rows.filter(function (d) { return d.status !== "completed"; });
-
-    select.innerHTML = '<option value="">— Select dataset —</option>';
-    completed.concat(others).forEach(function (d) {
-      var opt = document.createElement("option");
-      opt.value = d.id;
-      opt.textContent = d.name + (d.status !== "completed" ? " (" + d.status + ")" : "");
-      select.appendChild(opt);
-    });
-
-    if (current && rows.some(function (r) { return r.id === current; })) {
-      select.value = current;
-    } else if (completed.length > 0) {
-      select.value = completed[0].id;
+  /** The line under every page title that says which data is on screen. */
+  async function contextLine(id, extra) {
+    var el = $("#" + id);
+    if (!el || !state.active) return null;
+    el.innerHTML = "<b>" + esc(state.active.name) + "</b>";
+    var s = await activeSummary();
+    if (!state.active) return s;
+    var parts = ["<b>" + esc(state.active.name) + "</b>"];
+    if (s && s.available) {
+      parts.push(num(s.totalRequests) + " requests");
+      if (s.dateRange && s.dateRange.start) parts.push(esc(period(s.dateRange)));
     }
-
-    LogSightAPI.setCurrentDataset(select.value || null);
-    return rows;
+    if (extra) parts.push(extra);
+    el.innerHTML = parts.join('<span class="dot" aria-hidden="true"></span>');
+    return s;
   }
 
-  // -------------------------------------------------------------------------
-  // Dashboard — preferences (widget visibility)
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Overview
+  // ---------------------------------------------------------------------------
 
-  function loadPrefsFromStorage() {
-    try {
-      var raw = localStorage.getItem(PREFS_KEY);
-      return raw ? JSON.parse(raw) : { hidden_widgets: [] };
-    } catch (_) { return { hidden_widgets: [] }; }
+  function verdict(rate) {
+    if (rate == null) return { cls: "", text: "" };
+    if (rate < 5) return { cls: "hl-good", text: "a healthy error rate" };
+    if (rate < 15) return { cls: "hl-warn", text: "more than a healthy site should show" };
+    return { cls: "hl-bad", text: "a serious share of the traffic" };
   }
 
-  function savePrefsToStorage(prefs) {
-    try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch (_) {}
-  }
+  async function loadOverview() {
+    var current = guard("overview");
+    var id = state.active.id;
+    var range = state.range, ranged = !!(range.from || range.to);
+    var opts = { dateFrom: range.from, dateTo: range.to };
 
-  function applyWidgetVisibility(hiddenWidgets) {
-    var hidden = Array.isArray(hiddenWidgets) ? hiddenWidgets : [];
-    $all(".widget-toggle").forEach(function (cb) {
-      var widgetId = cb.getAttribute("data-widget");
-      cb.checked = hidden.indexOf(widgetId) === -1;
-    });
-    $all("[id^='widget-']").forEach(function (el) {
-      var widgetId = el.id.replace("widget-", "");
-      el.classList.toggle("hidden", hidden.indexOf(widgetId) !== -1);
-    });
-  }
+    $("#ov-lede").innerHTML = skeleton(3, "skeleton-lede");
+    $("#ov-range-clear").hidden = !ranged;
+    applyHiddenSections();
 
-  function initDashboardCustomize() {
-    var btn   = $("#dashboard-customize-btn");
-    var panel = $("#dashboard-customize-panel");
-    var save  = $("#dashboard-customize-save");
-    if (!btn || !panel || !save) return;
-
-    // Load saved prefs.
-    var prefs = loadPrefsFromStorage();
-    applyWidgetVisibility(prefs.hidden_widgets || []);
-
-    btn.addEventListener("click", function () {
-      panel.classList.toggle("hidden");
-    });
-
-    save.addEventListener("click", async function () {
-      var hidden = [];
-      $all(".widget-toggle").forEach(function (cb) {
-        if (!cb.checked) hidden.push(cb.getAttribute("data-widget"));
-      });
-      applyWidgetVisibility(hidden);
-      var newPrefs = { hidden_widgets: hidden };
-      savePrefsToStorage(newPrefs);
-      // Also persist to backend.
-      try { await LogSightAPI.savePreferences(newPrefs); } catch (_) {}
-      panel.classList.add("hidden");
-    });
-  }
-
-  // -------------------------------------------------------------------------
-  // Dashboard — data loading
-  // -------------------------------------------------------------------------
-
-  async function loadDashboardData() {
-    renderStatValue("stat-requests", null, "", "Loading…");
-    renderStatValue("stat-errors",   null, "", "Loading…");
-    renderStatValue("stat-latency",  null, "", "Loading…");
-    renderStatValue("stat-visitors", null, "", "Loading…");
-
-    await populateDashboardSelect();
-    var id = LogSightAPI.getCurrentDataset();
-
-    // Constrain the date pickers to the selected dataset's actual range.
-    if (id) await setDashboardDateConstraints(id);
-
-    if (!id) {
-      renderStatValue("stat-requests", null, "", "No datasets");
-      renderStatValue("stat-errors",   null, "", "—");
-      renderStatValue("stat-latency",  null, "", "—");
-      renderStatValue("stat-visitors", null, "", "—");
-      if (typeof LogSightCharts !== "undefined") LogSightCharts.destroyAll();
-      dashboardReady = true;
+    var full = await contextLine("ov-context", ranged ? "filtered by date" : "");
+    if (!current()) return;
+    if (!full || !full.available) {
+      $("#ov-lede").innerHTML = "The analytics for this dataset are not available yet. Try recalculating them, or check the dataset's status on the Datasets page.";
       return;
     }
 
-    var filter    = getDashboardDateFilter();
-    var isFiltered = !!(filter.dateFrom || filter.dateTo);
+    // Date pickers are limited to the days the log actually covers.
+    var dr = full.dateRange || {};
+    ["ov-from", "ov-to"].forEach(function (key) {
+      var input = $("#" + key);
+      input.min = (dr.start || "").slice(0, 10);
+      input.max = (dr.end || "").slice(0, 10);
+      input.value = key === "ov-from" ? range.from : range.to;
+    });
 
-    var summary;
-    if (isFiltered) {
-      var raw = await LogSightAPI.getFilteredSummary(id, filter.dateFrom, filter.dateTo);
-      summary = {
-        totalRequests:   raw.total_requests,
-        errorRate:       raw.error_rate,
-        avgResponseSize: raw.avg_response_size,
-        uniqueVisitors:  raw.unique_visitors,
-        totalErrors:     raw.total_errors,
-      };
-    } else {
-      summary = await LogSightAPI.getDashboardSummary(id);
+    var fig = { total: full.totalRequests, errors: full.totalErrors, rate: full.errorRate, visitors: full.uniqueVisitors, size: full.avgResponseSize, e4: full.errors4xx, e5: full.errors5xx };
+    if (ranged) {
+      try {
+        var f = await API.getFilteredSummary(id, range.from ? range.from + "T00:00:00Z" : "", range.to ? range.to + "T23:59:59Z" : "");
+        fig = { total: f.total_requests, errors: f.total_errors, rate: f.error_rate, visitors: f.unique_visitors, size: f.avg_response_size, e4: null, e5: null };
+      } catch (_) { toast("Could not apply the date range; showing the whole log.", "bad"); }
+      if (!current()) return;
     }
 
-    renderStatValue("stat-requests", summary.totalRequests  != null ? formatNumber(summary.totalRequests)                    : null, "", "No data");
-    renderStatValue("stat-errors",   summary.errorRate      != null ? Number(summary.errorRate).toFixed(2)                   : null, "%", "No data");
-    renderStatValue("stat-latency",  summary.avgResponseSize != null ? formatNumber(summary.avgResponseSize)                 : null, " B", "No data");
-    renderStatValue("stat-visitors", summary.uniqueVisitors != null ? formatNumber(summary.uniqueVisitors)                   : null, "", "No data");
+    // The finding.
+    var v = verdict(fig.rate);
+    var when = ranged
+      ? "Between <b>" + esc(range.from || (dr.start || "").slice(0, 10)) + "</b> and <b>" + esc(range.to || (dr.end || "").slice(0, 10)) + "</b>"
+      : (dr.start ? "Over <b>" + esc(period(dr)) + "</b>" : "In this log");
+    $("#ov-lede").innerHTML = fig.total
+      ? when + ', this site answered <span class="hl">' + num(fig.total) + " " + plural(fig.total, "request") + "</span> from <b>" + num(fig.visitors) +
+        " " + plural(fig.visitors, "visitor") + '</b>. <span class="' + v.cls + '">' + pct(fig.rate) + " failed</span>, " + v.text + "."
+      : when + ", no requests were recorded.";
 
-    if (summary.totalErrors != null) renderSubText("stat-errors-abs", formatNumber(summary.totalErrors));
+    countUp($("#fig-requests"), fig.total);
+    $("#fig-requests-note").textContent = full.durationHours && !ranged ? "about " + num(fig.total / Math.max(full.durationHours, 1)) + " an hour" : " ";
+    countUp($("#fig-errors"), fig.rate, function (x) { return x.toFixed(1) + "<small>%</small>"; });
+    $("#fig-errors-note").textContent = fig.e4 != null ? num(fig.e4) + " client · " + num(fig.e5) + " server" : num(fig.errors) + " failed requests";
+    countUp($("#fig-visitors"), fig.visitors);
+    $("#fig-visitors-note").textContent = fig.visitors ? (fig.total / fig.visitors).toFixed(1) + " requests each" : " ";
+    $("#fig-size").textContent = bytes(fig.size);
 
-    // Show or clear the active-filter indicator in the sub-text of the requests tile.
-    var reqSub = $("#stat-requests-sub");
-    if (reqSub) {
-      reqSub.textContent = isFiltered
-        ? (filter.dateFrom || "…") + " → " + (filter.dateTo || "…")
-        : "Select a dataset above";
-    }
+    // Default to daily buckets for long logs so the whole period is visible.
+    if (!state.interval) state.interval = (full.durationHours || 0) > 24 * 14 ? "day" : "hour";
+    setSegmented($("#ov-interval"), state.interval);
 
-    loadDashboardCharts(id, filter);
-    dashboardReady = true;
+    loadSignals(current);
+    loadTraffic(current, opts);
+    loadStatus(current, opts);
+    loadHours(current, opts);
+    loadEndpoints(current, opts, fig.total);
   }
 
-  async function loadDashboardCharts(datasetId, filter) {
-    var id = datasetId || LogSightAPI.getCurrentDataset();
-    LogSightCharts.destroyAll();
-    if (!id) return;
+  function signalRow(href, tagHtml, title, text) {
+    return '<a class="signal reveal" href="' + href + '"><span>' + tagHtml + '</span><span><span class="signal-title">' + esc(title) +
+      '</span><br /><span class="signal-text">' + text + "</span></span>" + icon("arrow-right") + "</a>";
+  }
 
-    var opts = filter || {};
+  function loadSignals(current) {
+    var host = $("#ov-signals"), id = state.active.id;
+    host.innerHTML = ["an", "se", "fc"].map(function (k) {
+      return '<div class="signal" id="sig-' + k + '"><span>' + skeleton(1) + "</span><span>" + skeleton(2) + "</span><span></span></div>";
+    }).join("");
+    var put = function (key, html) { var el = $("#sig-" + key); if (el && current()) el.outerHTML = html; };
+    var failed = function (key, title, href) {
+      put(key, signalRow(href, '<span class="tag tag-low">Unavailable</span>', title, "This analysis could not be run. Open the page to try again."));
+    };
 
-    var results = await Promise.all([
-      LogSightAPI.getRequestFrequency(id, { interval: "hour", limit: 168, dateFrom: opts.dateFrom, dateTo: opts.dateTo }),
-      LogSightAPI.getStatusDistribution(id, opts),
-      LogSightAPI.getTopEndpoints(id, 10, opts),
-      LogSightAPI.getTrafficPattern(id, opts),
-    ]);
+    // The three analyses run one after another: started together they compete
+    // for the server and all arrive late, in sequence each row fills in sooner.
+    var anomalies = function () { return API.getAnomalies(id, { method: "isolation_forest", sensitivity: "medium" }).then(function (d) {
+      if (!d.available) return failed("an", "Unusual hours", "#/anomalies");
+      var s = d.summary || {}, total = s.total_anomalies || 0, hours = (d.historical_series || []).length;
+      var tag = total === 0 ? '<span class="tag tag-good">Clear</span>'
+        : s.high_severity ? '<span class="tag tag-high">' + s.high_severity + " critical</span>"
+        : '<span class="tag tag-medium">' + total + " flagged</span>";
+      var worst = worstAnomaly(d.anomalies || []);
+      put("an", signalRow("#/anomalies", tag, "Unusual hours",
+        total ? "<b>" + total + "</b> of " + num(hours) + " hours stand out" + (worst ? ", most of all " + esc(worst.label) + "." : ".")
+              : "All " + num(hours) + " hours look consistent with one another."));
+    }).catch(function () { failed("an", "Unusual hours", "#/anomalies"); }); };
 
-    requestAnimationFrame(function () {
-      LogSightCharts.renderRequestFrequency("chart-requests", results[0]);
-      LogSightCharts.renderStatusDoughnut("chart-status",     results[1]);
-      LogSightCharts.renderTopEndpoints("chart-endpoints",    results[2]);
-      LogSightCharts.renderTrafficArea("chart-traffic",       results[3]);
+    var security = function () { return API.getSecurityInsights(id).then(function (d) {
+      var score = d.risk_score || 0, n = (d.findings || []).length, level = riskLevel(score);
+      var named = (d.findings || []).filter(function (f) { return f.source === "ai"; }).slice(0, 2).map(function (f) { return esc(f.title.replace(/ detected$/i, "").toLowerCase()); });
+      put("se", signalRow("#/security", '<span class="tag ' + level.tag + '">' + level.word + "</span>", "Security",
+        n ? "Risk score <b>" + score + "/100</b> from " + n + " " + plural(n, "finding") + (named.length ? ", including " + named.join(" and ") + "." : ".")
+          : "No attack patterns or suspicious client behaviour were found."));
+    }).catch(function () { failed("se", "Security", "#/security"); }); };
+
+    var forecast = function () { return API.getTrafficForecast(id, { periods: 24, method: "ml" }).then(function (d) {
+      if (!d.available || !(d.forecast || []).length) return failed("fc", "Next 24 hours", "#/forecast");
+      var total = d.forecast.reduce(function (a, p) { return a + p.value; }, 0);
+      var word = { increasing: "Rising", decreasing: "Falling", stable: "Steady" }[d.trend] || "Steady";
+      put("fc", signalRow("#/forecast", '<span class="tag tag-accent">' + word + "</span>", "Next 24 hours",
+        "About <b>" + num(total) + "</b> requests expected after the log ends, roughly " + num(total / d.forecast.length) + " an hour."));
+    }).catch(function () { failed("fc", "Next 24 hours", "#/forecast"); }); };
+
+    var step = function (next) { return function () { return current() ? next() : null; }; };
+    anomalies().then(step(forecast)).then(step(security));
+  }
+
+  async function loadTraffic(current, opts) {
+    var interval = state.interval || "hour";
+    var data = await API.getRequestFrequency(state.active.id, { interval: interval, limit: interval === "hour" ? 336 : 366, dateFrom: opts.dateFrom, dateTo: opts.dateTo });
+    if (!current()) return;
+    var values = data.available ? data.datasets[0].data : [];
+    var stamps = data.timestamps || [];
+    var labels = stamps.map(function (t) { return utc(t, interval === "day" ? "day" : "time"); });
+    Charts.traffic("chart-traffic", labels, values);
+    var cap = $("#ov-traffic-caption");
+    if (!values.length) { cap.textContent = "No requests fall inside this period."; return; }
+    var peak = values.indexOf(Math.max.apply(null, values));
+    var unit = interval === "day" ? "day" : "hour";
+    cap.innerHTML = "The busiest " + unit + " was <b>" + esc(labels[peak]) + "</b> with " + num(values[peak]) + " requests. Showing " +
+      (values.length >= (interval === "hour" ? 336 : 366) ? "the most recent " : "all ") + num(values.length) + " " + plural(values.length, unit) + ", in UTC.";
+  }
+
+  var STATUS_NAMES = { "1xx": "Informational", "2xx": "Success", "3xx": "Redirect", "4xx": "Client error", "5xx": "Server error", other: "Other" };
+
+  async function loadStatus(current, opts) {
+    var id = state.active.id;
+    var results = await Promise.all([API.getStatusDistribution(id, opts), API.getErrorBreakdown(id)]);
+    if (!current()) return;
+    var dist = results[0], errors = results[1];
+    var cats = dist.by_category || {}, keys = Object.keys(cats).filter(function (k) { return cats[k] > 0; });
+    var total = keys.reduce(function (a, k) { return a + cats[k]; }, 0);
+
+    $("#ov-stackbar").innerHTML = keys.map(function (k) { return '<span class="share-' + k + '" style="flex:' + cats[k] + ' 0 0" title="' + k + ": " + num(cats[k]) + '"></span>'; }).join("");
+    $("#ov-status-body").innerHTML = keys.length ? keys.map(function (k) {
+      return '<tr><td><i class="key share-' + k + '"></i><span class="mono">' + k + "</span> " + STATUS_NAMES[k] + '</td><td class="r">' + num(cats[k]) + '</td><td class="r">' + pct(cats[k] / total * 100) + "</td></tr>";
+    }).join("") : '<tr><td colspan="3" class="faint">No responses in this period.</td></tr>';
+
+    var urls = (errors.top_error_endpoints || []).slice(0, 5), max = urls.length ? urls[0].error_count : 1;
+    $("#ov-error-urls").innerHTML = urls.length ? urls.map(function (u, i) {
+      return '<li style="--i:' + i + '"><a class="rank-label truncate" href="#/explore" data-explore=\'' + esc(JSON.stringify({ endpoint: u.endpoint, status: "errors" })) + "'>" + esc(u.endpoint) +
+        '</a><span class="rank-value"><b>' + num(u.error_count) + '</b> errors</span><span class="rank-bar is-bad"><i style="width:' + (u.error_count / max * 100) + '%"></i></span></li>';
+    }).join("") : '<li class="faint" style="display:block">No failed requests in this log.</li>';
+  }
+
+  async function loadHours(current, opts) {
+    var data = await API.getTrafficPattern(state.active.id, opts);
+    if (!current()) return;
+    var values = data.available ? data.datasets[0].data : [];
+    Charts.hours("chart-hours", data.labels || [], values, data.peak_hour);
+    var cap = $("#ov-hours-caption");
+    if (!values.some(Boolean)) { cap.textContent = "No requests fall inside this period."; return; }
+    cap.innerHTML = "Traffic peaks around <b>" + pad(data.peak_hour) + ":00</b> and is quietest around <b>" + pad(data.quiet_hour) + ":00</b> (UTC), adding every day in the log together.";
+  }
+
+  async function loadEndpoints(current, opts, totalRequests) {
+    var data = await API.getTopEndpoints(state.active.id, 10, opts);
+    if (!current()) return;
+    var items = data.items || [], max = items.length ? items[0].value : 1;
+    var covered = items.reduce(function (a, i) { return a + (i.percentage || 0); }, 0);
+    $("#ov-endpoints-note").textContent = items.length
+      ? num(data.totalUniqueEndpoints) + " different URLs were requested. These " + items.length + " account for " + pct(covered, 0) + " of the traffic."
+      : "";
+    $("#ov-endpoints").innerHTML = items.length ? items.map(function (item, i) {
+      return '<li style="--i:' + i + '"><a class="rank-label truncate" href="#/explore" title="Show these requests" data-explore=\'' + esc(JSON.stringify({ endpoint: item.label })) + "'>" + esc(item.label) +
+        '</a><span class="rank-value"><b>' + num(item.value) + "</b> · " + pct(item.percentage) + '</span><span class="rank-bar"><i style="width:' + (item.value / max * 100) + '%"></i></span></li>';
+    }).join("") : '<li class="faint" style="display:block">No requests in this period.</li>';
+  }
+
+  function applyHiddenSections() {
+    $$("[data-widget]").forEach(function (el) { el.hidden = state.hidden.indexOf(el.dataset.widget) >= 0; });
+    $$("[data-widget-toggle]").forEach(function (box) { box.checked = state.hidden.indexOf(box.dataset.widgetToggle) < 0; });
+  }
+
+  function initOverview() {
+    initSegmented("ov-interval", function (value) {
+      state.interval = value;
+      busy(loadTraffic(guard("overview-traffic"), { dateFrom: state.range.from, dateTo: state.range.to }));
+    });
+    var onRange = function () {
+      var from = $("#ov-from").value, to = $("#ov-to").value;
+      if (from && to && from > to) { toast("The start date must be on or before the end date.", "bad"); return; }
+      state.range = { from: from, to: to };
+      reload("overview");
+    };
+    $("#ov-from").addEventListener("change", onRange);
+    $("#ov-to").addEventListener("change", onRange);
+    $("#ov-range-clear").addEventListener("click", function () { state.range = { from: "", to: "" }; reload("overview"); });
+
+    $("#ov-refresh").addEventListener("click", async function () {
+      var btn = this;
+      btn.disabled = true;
+      try {
+        await busy(API.refreshAnalytics(state.active.id));
+        state.summary = null;
+        forgetViews();
+        toast("Analytics recalculated from the stored log entries.", "good");
+        await reload("overview");
+      } catch (err) { toast(err.message || "Recalculation failed.", "bad"); }
+      btn.disabled = false;
+    });
+
+    bindPopover($("#ov-customise"), $("#ov-customise-pop"));
+    $("#ov-customise-pop").addEventListener("change", function () {
+      state.hidden = $$("[data-widget-toggle]").filter(function (b) { return !b.checked; }).map(function (b) { return b.dataset.widgetToggle; });
+      save(STORE.hidden, state.hidden);
+      applyHiddenSections();
+      API.savePreferences({ hidden_widgets: state.hidden }).catch(function () {});
     });
   }
 
-  async function updateStatPeriod(datasetId) {
-    var period = $("#stat-period");
-    if (!period) return;
-    if (!datasetId) { period.textContent = "Select a dataset"; return; }
-    try {
-      var result = await fetch(
-        "/logs/datasets/" + encodeURIComponent(datasetId) + "/analytics/summary/",
-        { credentials: "same-origin" }
-      );
-      if (!result.ok) return;
-      var data = await result.json();
-      var dr = data.date_range || {};
-      if (dr.start && dr.end) {
-        period.textContent = formatDate(dr.start) + " – " + formatDate(dr.end);
-      } else if (data.periodLabel) {
-        period.textContent = data.periodLabel;
+  // Cross-links into Explore carry their filter in a data attribute.
+  document.addEventListener("click", function (e) {
+    var link = e.target.closest("[data-explore]");
+    if (!link) return;
+    e.preventDefault();
+    openExplore(JSON.parse(link.dataset.explore));
+  });
+  function openExplore(filters) {
+    state.ex = Object.assign({ q: "", status: "all", method: "", ip: "", endpoint: "", from: "", to: "", page: 1 }, filters);
+    go("explore");
+  }
+
+  // ---------------------------------------------------------------------------
+  // Datasets and upload
+  // ---------------------------------------------------------------------------
+
+  var STATUS_TAGS = {
+    completed: ['tag-good', "Ready"],
+    processing: ['tag-accent tag-busy', "Processing"],
+    pending: ['tag-accent tag-busy', "Queued"],
+    failed: ['tag-high', "Failed"],
+  };
+
+  async function loadDatasets(force) {
+    await refreshDatasets(force);
+    renderDatasets();
+    // Keep watching while anything is still being parsed.
+    clearTimeout(state.polling);
+    if (state.route === "datasets" && state.datasets.some(function (d) { return d.status === "pending" || d.status === "processing"; })) {
+      state.polling = setTimeout(function () { if (state.route === "datasets") loadDatasets(true); }, 3000);
+    }
+  }
+
+  function renderDatasets() {
+    var rows = state.datasets, body = $("#ds-table-body");
+    $("#ds-empty").hidden = rows.length > 0;
+    $("#ds-table-wrap").hidden = rows.length === 0;
+    var ready = completed().length;
+    $("#ds-list-note").textContent = rows.length ? ready + " of " + rows.length + " ready to analyse" : "";
+
+    body.innerHTML = rows.map(function (d, i) {
+      var tag = STATUS_TAGS[d.status] || STATUS_TAGS.pending;
+      var isActive = state.active && state.active.id === d.id;
+      var actions = "";
+      if (d.status === "completed") {
+        actions += isActive ? '<span class="tag tag-accent">Working dataset</span>'
+                            : '<button type="button" class="btn btn-sm" data-open="' + esc(d.id) + '">Open</button>';
       }
-    } catch (_) {}
+      if (CAN_EDIT) actions += '<button type="button" class="icon-btn" data-delete="' + esc(d.id) + '" aria-label="Delete ' + esc(d.name) + '" title="Delete">' + icon("trash") + "</button>";
+      return '<tr class="row-enter' + (isActive ? " is-current" : "") + '" style="--i:' + i + '" data-row="' + esc(d.id) + '">' +
+        '<td><span class="ds-row-name">' + esc(d.name) + "</span>" +
+          (d.status === "failed" && d.processingError ? '<br /><span class="field-error" style="margin-top:4px">' + esc(d.processingError) + "</span>" : "") + "</td>" +
+        '<td><span class="tag ' + tag[0] + '">' + tag[1] + "</span></td>" +
+        '<td class="r">' + (d.totalEntries ? num(d.totalEntries) : "—") + "</td>" +
+        '<td class="r hide-sm">' + bytes(d.sizeBytes) + "</td>" +
+        '<td class="hide-sm nowrap">' + esc(localDate(d.uploadedAt)) + "</td>" +
+        '<td class="r"><span class="row-actions">' + actions + "</span></td></tr>";
+    }).join("");
   }
 
-  // Stores the currently-active dataset date bounds so the change listeners
-  // can clamp values without re-fetching.
-  var _dashDateMin = "";
-  var _dashDateMax = "";
+  function initDatasets() {
+    $$("[data-requires-edit]").forEach(function (el) { el.hidden = !CAN_EDIT; });
 
-  async function setDashboardDateConstraints(datasetId) {
-    var fromIn = $("#dash-date-from");
-    var toIn   = $("#dash-date-to");
-    var hint   = $("#dash-date-hint");
-
-    if (!fromIn || !toIn) return;
-
-    if (!datasetId) {
-      _dashDateMin = ""; _dashDateMax = "";
-      fromIn.min = ""; fromIn.max = ""; fromIn.value = "";
-      toIn.min   = ""; toIn.max   = ""; toIn.value   = "";
-      if (hint) hint.textContent = "";
-      return;
-    }
-
-    try {
-      var summary = await LogSightAPI.getDashboardSummary(datasetId);
-      var dr = summary.dateRange || {};
-      if (!dr.start || !dr.end) return;
-
-      // ISO → YYYY-MM-DD (works for both offset-aware and naive timestamps).
-      var minDate = dr.start.slice(0, 10);
-      var maxDate = dr.end.slice(0, 10);
-
-      _dashDateMin = minDate;
-      _dashDateMax = maxDate;
-
-      // Set HTML min/max — visually constrains Chrome/Edge calendar pickers.
-      fromIn.min = minDate; fromIn.max = maxDate;
-      toIn.min   = minDate; toIn.max   = maxDate;
-
-      // Pre-fill with the dataset's actual date range (same as log viewer).
-      fromIn.value = minDate;
-      toIn.value   = maxDate;
-
-      // Show the allowed range as text so every browser makes it obvious.
-      if (hint) hint.textContent = "(" + minDate + " – " + maxDate + ")";
-
-    } catch (_) {}
-  }
-
-  function initDashboardControls() {
-    var select = $("#dashboard-dataset");
-    if (select && !select._bound) {
-      select._bound = true;
-      select.addEventListener("change", function () {
-        LogSightAPI.setCurrentDataset(select.value || null);
-        dashboardReady = false;
-        setDashboardDateConstraints(select.value || null);
-        loadDashboardData();
-      });
-    }
-
-    var refreshBtn = $("#dashboard-refresh");
-    if (refreshBtn && !refreshBtn._bound) {
-      refreshBtn._bound = true;
-      refreshBtn.addEventListener("click", async function () {
-        var id = LogSightAPI.getCurrentDataset();
-        if (!id) return;
-        refreshBtn.disabled = true;
-        refreshBtn.textContent = "Refreshing…";
-        try { await LogSightAPI.refreshAnalytics(id); } catch (_) {}
-        dashboardReady = false;
-        refreshBtn.disabled = false;
-        refreshBtn.innerHTML =
-          '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
-          '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" ' +
-          'd="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0' +
-          'a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg> Refresh';
-        loadDashboardData();
-      });
-    }
-
-    initDashboardCustomize();
-  }
-
-  // -------------------------------------------------------------------------
-  // Upload
-  // -------------------------------------------------------------------------
-
-  function initUpload() {
-    var zone  = $("#drop-zone");
-    var input = $("#file-input");
-    var list  = $("#upload-queue");
-    var hint  = $("#upload-hint");
-    if (!zone || !input || !list) return;
-
-    LogSightAPI.getUploadConfig().then(function (cfg) {
-      if (!cfg || !hint) return;
-      var maxSize = cfg.max_upload_size ? formatBytes(cfg.max_upload_size) : "server limit";
-      hint.textContent = "Accepted: Apache / Nginx access logs (.log, .txt, .gz). Max size: " + maxSize + ".";
-    });
-
-    function handleFiles(files) {
-      if (!files || !files.length) return;
-      Array.prototype.forEach.call(files, queueUpload);
-    }
-
-    zone.addEventListener("click", function () { input.click(); });
-    input.addEventListener("change", function () { handleFiles(input.files); input.value = ""; });
-
-    ["dragenter", "dragover", "dragleave", "drop"].forEach(function (ev) {
-      zone.addEventListener(ev, function (e) { e.preventDefault(); e.stopPropagation(); });
-    });
-    zone.addEventListener("dragenter", function () {
-      zone.classList.add("border-indigo-500", "bg-indigo-50", "dark:bg-indigo-950/40", "drop-zone-active");
-    });
-    zone.addEventListener("dragleave", function (e) {
-      if (!zone.contains(e.relatedTarget))
-        zone.classList.remove("border-indigo-500", "bg-indigo-50", "dark:bg-indigo-950/40", "drop-zone-active");
-    });
-    zone.addEventListener("drop", function (e) {
-      zone.classList.remove("border-indigo-500", "bg-indigo-50", "dark:bg-indigo-950/40", "drop-zone-active");
-      handleFiles(e.dataTransfer.files);
-    });
-
-    function queueUpload(file) {
-      var row = document.createElement("div");
-      row.className = "rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition-all dark:border-slate-700 dark:bg-slate-900/80";
-      row.innerHTML =
-        '<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">' +
-        '<div class="min-w-0"><p class="truncate font-medium text-slate-800 dark:text-slate-100">' + escapeHtml(file.name) + "</p>" +
-        '<p class="text-xs text-slate-500 dark:text-slate-400">' + escapeHtml(formatBytes(file.size)) + "</p></div>" +
-        '<div class="w-full sm:w-56"><div class="h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">' +
-        '<div class="progress-shimmer h-full w-full rounded-full bg-indigo-500"></div></div>' +
-        '<p class="mt-1 text-xs text-slate-500 dark:text-slate-400 upload-status">Uploading…</p>' +
-        "</div></div>";
-      list.prepend(row);
-
-      var statusEl = $(".upload-status", row);
-
-      LogSightAPI.uploadDataset(file, {
-        onProgress: function (status) {
-          if (!statusEl) return;
-          var done = status && Number(status.total_entries);
-          statusEl.textContent = done
-            ? "Parsing… " + done.toLocaleString() + " entries so far"
-            : "Parsing… this may take a moment for large files.";
-        },
-      }).then(function (dataset) {
-        var shimmer = $(".progress-shimmer", row);
-        if (shimmer) { shimmer.classList.remove("progress-shimmer"); shimmer.classList.add("bg-emerald-500"); }
-        row.classList.add("ring-2", "ring-emerald-500/30");
-        LogSightAPI.setCurrentDataset(dataset.id);
-        if (getHashRoute() === "datasets") loadDatasetsTable();
-        populateDashboardSelect().then(function () {
-          if (statusEl) {
-            var entries = dataset.totalEntries ? " (" + Number(dataset.totalEntries).toLocaleString() + " entries)" : "";
-            statusEl.textContent = "Complete" + entries;
-          }
-        });
-      }).catch(function (err) {
-        if (statusEl) statusEl.textContent = err.message || "Upload failed.";
-        var shimmer = $(".progress-shimmer", row);
-        if (shimmer) { shimmer.classList.remove("progress-shimmer", "bg-indigo-500"); shimmer.classList.add("bg-red-500"); }
-        row.classList.add("ring-2", "ring-red-500/20");
-      });
-    }
-  }
-
-  // -------------------------------------------------------------------------
-  // Datasets table
-  // -------------------------------------------------------------------------
-
-  async function loadDatasetsTable() {
-    var tbody = $("#datasets-body");
-    if (!tbody) return;
-    setTableMessage(tbody, "Loading datasets…", 7);
-
-    var rows = await LogSightAPI.listDatasets();
-    tbody.innerHTML = "";
-
-    if (!rows.length) {
-      setTableMessage(tbody, "No datasets yet. Upload a log file to get started.", 7);
-      return;
-    }
-
-    rows.forEach(function (dataset, index) {
-      var tr = document.createElement("tr");
-      tr.className = "table-row-animate border-b border-slate-100 transition-colors hover:bg-cyan-50/60 dark:border-slate-800 dark:hover:bg-cyan-950/20";
-      tr.style.animationDelay = index * 40 + "ms";
-
-      var entriesText = dataset.totalEntries != null ? Number(dataset.totalEntries).toLocaleString() : "—";
-
-      tr.innerHTML =
-        '<td class="px-4 py-3 font-mono text-xs text-slate-600 dark:text-slate-400">' + escapeHtml(dataset.id) + "</td>" +
-        '<td class="px-4 py-3 font-medium text-slate-800 dark:text-slate-100">' + escapeHtml(dataset.name) + "</td>" +
-        '<td class="px-4 py-3"><span class="inline-flex items-center rounded border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-medium text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">' + escapeHtml(dataset.source) + "</span></td>" +
-        '<td class="px-4 py-3 text-slate-600 dark:text-slate-400">' + escapeHtml(formatBytes(dataset.sizeBytes)) + "</td>" +
-        '<td class="px-4 py-3 tabular-nums text-slate-600 dark:text-slate-400">' + escapeHtml(entriesText) + "</td>" +
-        '<td class="px-4 py-3 text-slate-600 dark:text-slate-400">' + escapeHtml(formatDate(dataset.uploadedAt)) + "</td>" +
-        '<td class="px-4 py-3 text-right whitespace-nowrap">' +
-          '<div class="inline-flex items-center gap-2">' +
-          '<span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ' + buildStatusBadge(dataset.status) + '">' + escapeHtml(dataset.status) + "</span>" +
-          '<button type="button" data-analyse-ds="' + escapeHtml(dataset.id) + '" class="inline-flex items-center rounded-lg border border-cyan-200 px-2.5 py-1 text-xs font-medium text-cyan-700 transition-colors hover:bg-cyan-50 dark:border-cyan-900/60 dark:text-cyan-300 dark:hover:bg-cyan-950/40"' +
-          (dataset.status !== "completed" ? ' disabled title="Dataset not yet completed"' : "") + ">Analyse</button>" +
-          '<button type="button" data-view-ds="' + escapeHtml(dataset.id) + '" class="inline-flex items-center rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800/80">View</button>' +
-          '<button type="button" data-del-ds="' + escapeHtml(dataset.id) + '" class="inline-flex items-center rounded-lg border border-red-200 px-2.5 py-1 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 dark:border-red-900/50 dark:text-red-400 dark:hover:bg-red-950/30">Delete</button>' +
-          "</div></td>";
-      tbody.appendChild(tr);
-    });
-
-    tbody.querySelectorAll("[data-analyse-ds]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        LogSightAPI.setCurrentDataset(btn.getAttribute("data-analyse-ds"));
-        setHashRoute("dashboard");
-      });
-    });
-
-    tbody.querySelectorAll("[data-view-ds]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        pendingViewerDatasetId = btn.getAttribute("data-view-ds") || "";
-        setHashRoute("viewer");
-      });
-    });
-
-    tbody.querySelectorAll("[data-del-ds]").forEach(function (btn) {
-      btn.addEventListener("click", async function () {
-        var dsId = btn.getAttribute("data-del-ds");
-        if (!confirm("Permanently delete this dataset and all its log entries?")) return;
+    $("#ds-table-body").addEventListener("click", async function (e) {
+      var open = e.target.closest("[data-open]"), del = e.target.closest("[data-delete]");
+      var yes = e.target.closest("[data-confirm-delete]"), no = e.target.closest("[data-cancel-delete]");
+      if (open) {
+        var d = state.datasets.filter(function (x) { return x.id === open.dataset.open; })[0];
+        setActive(d, true);
+        toast("“" + d.name + "” is now the working dataset.", "good");
+        go("overview");
+      } else if (del) {
+        // Confirm in place: the row itself asks, so the eye never leaves it.
+        var cell = del.closest(".row-actions");
+        cell.dataset.previous = cell.innerHTML;
+        cell.innerHTML = '<span class="confirm">Delete this log and its entries? <button type="button" class="btn btn-sm btn-danger" data-confirm-delete="' + esc(del.dataset.delete) +
+          '">Delete</button><button type="button" class="btn btn-sm btn-quiet" data-cancel-delete>Keep</button></span>';
+        $("[data-cancel-delete]", cell).focus();
+      } else if (no) {
+        var c = no.closest(".row-actions");
+        c.innerHTML = c.dataset.previous;
+      } else if (yes) {
+        yes.setAttribute("aria-busy", "true");
         try {
-          await LogSightAPI.deleteDataset(dsId);
-          await loadDatasetsTable();
-          var viewerSelect = $("#viewer-dataset");
-          if (viewerSelect && viewerSelect.value === dsId) {
-            await populateViewerSelect();
-            viewerPage = 1;
-            fetchAndRenderLogs();
-          }
-          if (getHashRoute() === "dashboard") await populateDashboardSelect();
-        } catch (err) {
-          window.alert(err.message || "Deletion failed.");
-        }
-      });
-    });
-  }
-
-  // -------------------------------------------------------------------------
-  // Log viewer
-  // -------------------------------------------------------------------------
-
-  function setLogsLoadingMessage(message) {
-    var tbody = $("#logs-body");
-    var meta  = $("#logs-meta");
-    if (tbody) tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-8 text-center text-slate-500 dark:text-slate-400"><span class="loading-inline">' + escapeHtml(message) + "</span></td></tr>";
-    if (meta) meta.textContent = "";
-    updateLogPagination(true, true);
-  }
-
-  function setLogsMessage(message) {
-    var tbody = $("#logs-body");
-    var meta  = $("#logs-meta");
-    if (tbody) tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-8 text-center text-slate-500 dark:text-slate-400">' + escapeHtml(message) + "</td></tr>";
-    if (meta) meta.textContent = "";
-    updateLogPagination(true, true);
-  }
-
-  function updateLogPagination(prevDisabled, nextDisabled) {
-    var prev = $("#logs-prev");
-    var next = $("#logs-next");
-    if (prev) prev.disabled = !!prevDisabled;
-    if (next) next.disabled = !!nextDisabled;
-  }
-
-  async function populateViewerSelect() {
-    var select = $("#viewer-dataset");
-    if (!select) return [];
-
-    var current = pendingViewerDatasetId || select.value;
-    select.innerHTML = '<option value="">Loading…</option>';
-    var rows = await LogSightAPI.listDatasets();
-    select.innerHTML = '<option value="">Select a dataset…</option>';
-
-    rows.forEach(function (d) {
-      var opt = document.createElement("option");
-      opt.value = d.id;
-      opt.textContent = d.name + " (" + d.status + ")";
-      select.appendChild(opt);
-    });
-
-    if (current && rows.some(function (r) { return r.id === current; })) select.value = current;
-    pendingViewerDatasetId = "";
-    return rows;
-  }
-
-  // ── Date range fix: set picker min/max/value from dataset analytics summary ──
-  async function setViewerDateRange(datasetId) {
-    if (!datasetId) return;
-    var fromInput = $("#viewer-date-from");
-    var toInput   = $("#viewer-date-to");
-    var hint      = $("#viewer-date-hint");
-    if (!fromInput || !toInput) return;
-
-    try {
-      var summary = await LogSightAPI.getDashboardSummary(datasetId);
-      if (!summary.available) return;
-
-      // getDashboardSummary exposes periodLabel but we need raw ISO dates.
-      // Fetch the analytics summary endpoint directly for date_range.
-      var result = await fetch(
-        "/logs/datasets/" + encodeURIComponent(datasetId) + "/analytics/summary/",
-        { credentials: "same-origin" }
-      );
-      if (!result.ok) return;
-      var data = await result.json();
-      var dr   = data.date_range || {};
-      var start = dr.start;
-      var end   = dr.end;
-      if (!start || !end) return;
-
-      var startLocal = isoToDatetimeLocal(start);
-      var endLocal   = isoToDatetimeLocal(end);
-
-      fromInput.min   = startLocal;
-      fromInput.max   = endLocal;
-      fromInput.value = startLocal;
-
-      toInput.min   = startLocal;
-      toInput.max   = endLocal;
-      toInput.value = endLocal;
-
-      if (hint) {
-        hint.classList.remove("hidden");
-        hint.textContent = "Date range set to log data: " + formatDate(start) + " → " + formatDate(end);
+          await API.deleteDataset(yes.dataset.confirmDelete);
+          API.invalidate();
+          forgetViews();
+          toast("Dataset deleted.", "good");
+        } catch (err) { toast(err.message || "The dataset could not be deleted.", "bad"); }
+        await loadDatasets(true);
       }
-    } catch (_) {}
-  }
-
-  async function fetchAndRenderLogs() {
-    var select    = $("#viewer-dataset");
-    var statusSel = $("#viewer-status");
-    var search    = $("#viewer-search");
-    var dateFrom  = $("#viewer-date-from");
-    var dateTo    = $("#viewer-date-to");
-    var tbody     = $("#logs-body");
-    var meta      = $("#logs-meta");
-    if (!select || !tbody || !meta) return;
-
-    var datasetId = select.value;
-    if (!datasetId) { setLogsMessage("Select a dataset to view log entries."); return; }
-
-    setLogsLoadingMessage("Loading log entries…");
-
-    var result = await LogSightAPI.getLogLines(datasetId, {
-      page:     viewerPage,
-      pageSize: 25,
-      search:   search    ? search.value    : "",
-      status:   statusSel ? statusSel.value : "all",
-      dateFrom: dateFrom  ? dateFrom.value  : "",
-      dateTo:   dateTo    ? dateTo.value    : "",
     });
 
-    if (!result.available) {
-      setLogsMessage(result.message || "Log entries could not be loaded.");
-      return;
-    }
-
-    var from = result.items.length ? (result.page - 1) * result.pageSize + 1 : 0;
-    var to   = (result.page - 1) * result.pageSize + result.items.length;
-    meta.textContent = "Showing " + from + "–" + to + " of " + Number(result.total).toLocaleString() + " entries";
-
-    tbody.innerHTML = "";
-    if (!result.items.length) {
-      tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-8 text-center text-slate-500 dark:text-slate-400">No matching log entries.</td></tr>';
-      updateLogPagination(result.page <= 1, result.page >= result.totalPages);
-      return;
-    }
-
-    result.items.forEach(function (line, index) {
-      var tr = document.createElement("tr");
-      tr.className = "table-row-animate border-b border-slate-100 font-mono text-xs dark:border-slate-800";
-      tr.style.animationDelay = index * 25 + "ms";
-
-      var code = Number(line.status || 0);
-      var badgeClass = "border border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300";
-      if (code >= 500)      badgeClass = "border border-red-200 bg-red-50 text-red-800 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300";
-      else if (code >= 400) badgeClass = "border border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300";
-      else if (code >= 200) badgeClass = "border border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-300";
-
-      tr.innerHTML =
-        '<td class="whitespace-nowrap px-3 py-2 text-slate-500 dark:text-slate-400">' + escapeHtml(formatDate(line.timestamp)) + "</td>" +
-        '<td class="px-3 py-2"><span class="inline-flex rounded px-1.5 py-0.5 text-[10px] font-semibold ' + badgeClass + '">' + escapeHtml(line.status || "—") + "</span></td>" +
-        '<td class="px-3 py-2 text-slate-600 dark:text-slate-400">' + escapeHtml(line.method || "—") + "</td>" +
-        '<td class="whitespace-nowrap px-3 py-2 font-mono text-xs text-slate-600 dark:text-slate-400">' + escapeHtml(line.ip_address || "—") + "</td>" +
-        '<td class="max-w-md truncate px-3 py-2 text-slate-800 dark:text-slate-200" title="' + escapeHtml(line.raw || "") + '">' + escapeHtml(line.raw || "—") + "</td>";
-      tbody.appendChild(tr);
+    if (!CAN_EDIT) return;
+    var zone = $("#dropzone"), input = $("#file-input"), limit = 500 * 1024 * 1024;
+    API.getUploadConfig().then(function (cfg) {
+      if (!cfg) return;
+      if (cfg.max_upload_size) limit = cfg.max_upload_size;
+      $("#upload-hint").textContent = "Apache or Nginx access logs: " + (cfg.accepted_types || [".log", ".txt"]).join(", ") + ". Up to " + bytes(limit) + " each.";
     });
 
-    updateLogPagination(result.page <= 1, result.page >= result.totalPages);
-
-    var prev = $("#logs-prev");
-    var next = $("#logs-next");
-    if (prev) prev.onclick = function () { if (viewerPage > 1) { viewerPage--; fetchAndRenderLogs(); } };
-    if (next) next.onclick = function () { if (viewerPage < result.totalPages) { viewerPage++; fetchAndRenderLogs(); } };
+    var accept = function (files) {
+      Array.prototype.forEach.call(files || [], function (file) {
+        if (!/\.(log|txt)(\.gz)?$/i.test(file.name)) { toast("“" + file.name + "” is not a .log or .txt file (optionally gzipped).", "bad"); return; }
+        if (file.size > limit) { toast("“" + file.name + "” is larger than the " + bytes(limit) + " limit.", "bad"); return; }
+        upload(file);
+      });
+    };
+    input.addEventListener("change", function () { accept(input.files); input.value = ""; });
+    ["dragenter", "dragover"].forEach(function (name) {
+      zone.addEventListener(name, function (e) { e.preventDefault(); zone.classList.add("is-over"); });
+    });
+    ["dragleave", "drop"].forEach(function (name) {
+      zone.addEventListener(name, function (e) { e.preventDefault(); if (name === "drop" || !zone.contains(e.relatedTarget)) zone.classList.remove("is-over"); });
+    });
+    zone.addEventListener("drop", function (e) { accept(e.dataTransfer && e.dataTransfer.files); });
   }
 
-  function initLogViewer() {
-    populateViewerSelect().then(function (rows) {
-      var select = $("#viewer-dataset");
-      if (select && !select.value && rows.length) select.value = rows[0].id;
-      viewerPage = 1;
-      // Set date range from analytics before fetching logs.
-      if (select && select.value) {
-        setViewerDateRange(select.value).then(function () { fetchAndRenderLogs(); });
-        updateStatPeriod(select.value);
+  function upload(file) {
+    var row = document.createElement("div");
+    row.className = "upload";
+    row.innerHTML = '<span class="upload-name truncate">' + esc(file.name) + ' <span class="faint" style="font-weight:400">· ' + bytes(file.size) + '</span></span>' +
+      '<span class="upload-state">Uploading…</span><span class="progress"><i></i></span>';
+    $("#uploads").prepend(row);
+    var stateEl = $(".upload-state", row);
+
+    API.uploadDataset(file, {
+      onProgress: function (status) {
+        var done = status && Number(status.total_entries);
+        stateEl.textContent = done ? "Reading lines… " + num(done) + " so far" : "Reading lines…";
+      },
+    }).then(async function (dataset) {
+      row.classList.add("is-done");
+      stateEl.innerHTML = num(dataset.totalEntries) + " requests read";
+      API.invalidate();
+      forgetViews();
+      var hadActive = !!state.active;
+      await loadDatasets(true);
+      if (!hadActive) {
+        toast("“" + dataset.name + "” is ready and has been opened.", "good");
+        go("overview");
       } else {
-        fetchAndRenderLogs();
-        updateStatPeriod("");
+        var open = document.createElement("button");
+        open.type = "button"; open.className = "btn btn-sm"; open.textContent = "Open";
+        open.addEventListener("click", function () {
+          var d = state.datasets.filter(function (x) { return x.id === dataset.id; })[0];
+          if (d) { setActive(d, true); go("overview"); }
+        });
+        stateEl.appendChild(document.createTextNode(" "));
+        stateEl.appendChild(open);
+        toast("“" + dataset.name + "” is ready to analyse.", "good");
       }
+    }).catch(function (err) {
+      row.classList.add("is-failed");
+      stateEl.textContent = err.message || "Upload failed.";
+      loadDatasets(true);
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Explore
+  // ---------------------------------------------------------------------------
+
+  var EX_FIELDS = { q: "ex-q", status: "ex-status", method: "ex-method", ip: "ex-ip", endpoint: "ex-endpoint", from: "ex-from", to: "ex-to" };
+  var EX_LABELS = { q: "contains", status: "status", method: "method", ip: "client", endpoint: "path", from: "from", to: "to" };
+
+  function exActive() {
+    return Object.keys(EX_FIELDS).filter(function (k) { return k === "status" ? state.ex.status !== "all" : !!state.ex[k]; });
+  }
+
+  async function loadExplore() {
+    var current = guard("explore");
+    Object.keys(EX_FIELDS).forEach(function (k) { $("#" + EX_FIELDS[k]).value = state.ex[k] || (k === "status" ? "all" : ""); });
+    renderChips();
+    renderSaved();
+    contextLine("ex-context").then(function (s) {
+      var dr = s && s.dateRange;
+      if (!dr || !dr.start) return;
+      ["ex-from", "ex-to"].forEach(function (id) { $("#" + id).min = dr.start.slice(0, 16); $("#" + id).max = dr.end.slice(0, 16); });
+    });
+    await fetchLogs(current);
+  }
+
+  async function fetchLogs(current) {
+    current = current || guard("explore");
+    var body = $("#ex-body"), f = state.ex;
+    if (!body.children.length) body.innerHTML = Array(8).join('<tr><td colspan="6">' + skeleton(1) + "</td></tr>");
+    $("#ex-table-wrap").style.opacity = 0.55;
+
+    var result = await API.getLogLines(state.active.id, {
+      page: f.page, pageSize: 50, status: f.status, search: f.q, ip: f.ip, method: f.method, endpoint: f.endpoint,
+      dateFrom: f.from, dateTo: f.to,
+    });
+    if (!current()) return;
+    $("#ex-table-wrap").style.opacity = "";
+
+    var filtered = exActive().length > 0;
+    $("#ex-count").textContent = result.available
+      ? num(result.total) + " " + plural(result.total, "request") + (filtered ? " match" + (result.total === 1 ? "es" : "") : " in this dataset")
+      : "Requests";
+    $("#ex-empty").hidden = !(result.available && result.total === 0);
+    $("#ex-table-wrap").hidden = result.available && result.total === 0;
+
+    body.innerHTML = result.items.map(function (line, i) {
+      var cls = "status-" + String(line.status).charAt(0);
+      return '<tr class="log-row row-enter" style="--i:' + i + '" tabindex="0" data-raw="' + esc(line.raw) + '" data-ip="' + esc(line.ip_address) + '" data-endpoint="' + esc(line.endpoint) + '">' +
+        '<td class="mono nowrap">' + esc(utc(line.timestamp, "seconds")) + "</td>" +
+        '<td class="mono hide-sm">' + esc(line.ip_address) + "</td>" +
+        '<td class="mono">' + esc(line.method) + "</td>" +
+        '<td class="path">' + esc(line.endpoint.length > 140 ? line.endpoint.slice(0, 140) + "…" : line.endpoint) + "</td>" +
+        '<td class="r"><span class="status ' + cls + '">' + esc(line.status) + "</span></td>" +
+        '<td class="r hide-sm nowrap">' + (line.responseSize != null ? bytes(line.responseSize) : "—") + "</td></tr>";
+    }).join("");
+
+    $("#ex-page").textContent = result.total ? "Page " + num(result.page) + " of " + num(result.totalPages) : "";
+    $("#ex-prev").disabled = result.page <= 1;
+    $("#ex-next").disabled = result.page >= result.totalPages;
+    state.ex.page = result.page;
+    state.loaded.explore = viewKey("explore");
+  }
+
+  function renderChips() {
+    var keys = exActive();
+    $("#ex-chips").innerHTML = keys.map(function (k) {
+      var value = k === "from" || k === "to" ? state.ex[k].replace("T", " ") : state.ex[k];
+      return '<span class="chip">' + EX_LABELS[k] + ": " + esc(value.length > 48 ? value.slice(0, 48) + "…" : value) +
+        '<button type="button" data-remove-filter="' + k + '" aria-label="Remove ' + EX_LABELS[k] + ' filter">' + icon("x", "icon-sm") + "</button></span>";
+    }).join("");
+    $("#ex-save").disabled = keys.length === 0;
+    $("#ex-clear").disabled = keys.length === 0;
+  }
+
+  function renderSaved() {
+    var saved = load(STORE.saved, []);
+    $("#ex-saved").innerHTML = saved.length
+      ? '<span class="label-sm">Saved</span>' + saved.map(function (s, i) {
+          return '<span class="chip chip-plain" style="padding-right:4px"><button type="button" data-apply-saved="' + i + '" style="width:auto;border-radius:0;font-weight:600">' + esc(s.name) +
+            '</button><button type="button" data-delete-saved="' + i + '" aria-label="Delete saved filter ' + esc(s.name) + '">' + icon("x", "icon-sm") + "</button></span>";
+        }).join("")
+      : "";
+  }
+
+  function initExplore() {
+    var timer;
+    var apply = function (delay) {
+      clearTimeout(timer);
+      timer = setTimeout(function () {
+        Object.keys(EX_FIELDS).forEach(function (k) { state.ex[k] = $("#" + EX_FIELDS[k]).value.trim(); });
+        if (state.ex.from && state.ex.to && state.ex.from > state.ex.to) { toast("“From” must be earlier than “To”.", "bad"); return; }
+        state.ex.page = 1;
+        renderChips();
+        busy(fetchLogs());
+      }, delay);
+    };
+    $("#ex-form").addEventListener("input", function (e) { apply(e.target.tagName === "SELECT" || e.target.type === "datetime-local" ? 0 : 320); });
+    $("#ex-form").addEventListener("submit", function (e) { e.preventDefault(); apply(0); });
+
+    var clear = function () { openExplore({}); };
+    $("#ex-clear").addEventListener("click", clear);
+    $('[data-action="ex-clear"]').addEventListener("click", clear);
+
+    $("#ex-chips").addEventListener("click", function (e) {
+      var b = e.target.closest("[data-remove-filter]");
+      if (!b) return;
+      state.ex[b.dataset.removeFilter] = b.dataset.removeFilter === "status" ? "all" : "";
+      state.ex.page = 1;
+      reload("explore");
     });
 
-    var select    = $("#viewer-dataset");
-    var statusSel = $("#viewer-status");
-    var search    = $("#viewer-search");
-    var dateFrom  = $("#viewer-date-from");
-    var dateTo    = $("#viewer-date-to");
-    var refresh   = $("#logs-refresh");
-
-    if (select && !select._bound) {
-      select._bound = true;
-      select.addEventListener("change", function () {
-        viewerPage = 1;
-        // Reset date pickers first, then load.
-        var fromInput = $("#viewer-date-from");
-        var toInput   = $("#viewer-date-to");
-        if (fromInput) { fromInput.value = ""; fromInput.min = ""; fromInput.max = ""; }
-        if (toInput)   { toInput.value   = ""; toInput.min   = ""; toInput.max   = ""; }
-        var hint = $("#viewer-date-hint");
-        if (hint) hint.classList.add("hidden");
-        if (select.value) {
-          setViewerDateRange(select.value).then(function () { fetchAndRenderLogs(); });
-          updateStatPeriod(select.value);
-        } else {
-          fetchAndRenderLogs();
-          updateStatPeriod("");
-        }
-      });
-    }
-    if (statusSel && !statusSel._bound) {
-      statusSel._bound = true;
-      statusSel.addEventListener("change", function () { viewerPage = 1; fetchAndRenderLogs(); });
-    }
-    if (search && !search._bound) {
-      search._bound = true;
-      search.addEventListener("input", function () {
-        clearTimeout(viewerSearchDebounce);
-        viewerSearchDebounce = setTimeout(function () { viewerPage = 1; fetchAndRenderLogs(); }, 320);
-      });
-    }
-    if (dateFrom && !dateFrom._bound) {
-      dateFrom._bound = true;
-      dateFrom.addEventListener("change", function () { viewerPage = 1; fetchAndRenderLogs(); });
-    }
-    if (dateTo && !dateTo._bound) {
-      dateTo._bound = true;
-      dateTo.addEventListener("change", function () { viewerPage = 1; fetchAndRenderLogs(); });
-    }
-    if (refresh && !refresh._bound) {
-      refresh._bound = true;
-      refresh.addEventListener("click", function () { fetchAndRenderLogs(); });
-    }
-  }
-
-  // -------------------------------------------------------------------------
-  // Traffic Forecasting view
-  // -------------------------------------------------------------------------
-
-  var forecastInitDone = false;
-
-  async function initForecastView() {
-    if (!forecastInitDone) {
-      forecastInitDone = true;
-      await populateSelect("forecast-dataset");
-      var methodSel = $("#forecast-method");
-      if (methodSel) {
-        methodSel.addEventListener("change", function () {
-          var desc = $("#forecast-method-desc");
-          if (!desc) return;
-          if (methodSel.value === "linear_regression") {
-            desc.innerHTML = '<strong>Linear Regression:</strong> Fits a straight line to all historical hourly data using ordinary least squares, then extrapolates forward. Best for showing a clean overall trend direction.';
-          } else if (methodSel.value === "ml") {
-            desc.innerHTML = '<strong>Machine Learning (Random Forest):</strong> Trains a model on this dataset\'s own history. For every past hour it learns from the hour of day, the day of week, and the traffic 1, 2, 3 and 24 hours earlier, then predicts forward one hour at a time. The shaded band comes from how much the model\'s 100 decision trees disagree. Needs at least 3 days of data.';
-          } else {
-            desc.innerHTML = '<strong>Seasonal Pattern:</strong> Averages traffic per hour-of-day across the full dataset history, then projects those daily rhythms forward with a trend adjustment. Produces realistic peaks and troughs rather than a flat line.';
-          }
-        });
-      }
-    } else {
-      await populateSelect("forecast-dataset");
-    }
-
-    var runBtn = $("#forecast-run");
-    if (runBtn && !runBtn._bound) {
-      runBtn._bound = true;
-      runBtn.addEventListener("click", runForecast);
-    }
-  }
-
-  async function runForecast() {
-    var dsSelect = $("#forecast-dataset");
-    var methodSel = $("#forecast-method");
-    var periodsInput = $("#forecast-periods");
-    if (!dsSelect || !dsSelect.value) { window.alert("Please select a dataset first."); return; }
-
-    var runBtn = $("#forecast-run");
-    if (runBtn) { runBtn.disabled = true; runBtn.textContent = "Running…"; }
-
-    try {
-      var data = await LogSightAPI.getTrafficForecast(dsSelect.value, {
-        periods: parseInt(periodsInput ? periodsInput.value : "24", 10) || 24,
-        method:  methodSel ? methodSel.value : "moving_avg",
-      });
-
-      // Show summary cards.
-      var cards = $("#forecast-summary-cards");
-      if (cards) {
-        cards.classList.remove("hidden");
-        cards.classList.add("grid");
-      }
-      renderStatValue("forecast-stat-points", data.summary && data.summary.total_historical_points, "", "—");
-      renderStatValue("forecast-stat-avg",    data.summary && data.summary.avg_historical != null ? data.summary.avg_historical.toLocaleString() : null, "", "—");
-
-      var trendEl = $("#forecast-stat-trend");
-      if (trendEl) {
-        var trendMap = { increasing: "↑ Increasing", decreasing: "↓ Decreasing", stable: "→ Stable" };
-        trendEl.textContent = trendMap[data.trend] || data.trend || "—";
-        trendEl.className = "mt-2 text-2xl font-bold " + (
-          data.trend === "increasing" ? "text-emerald-600 dark:text-emerald-400" :
-          data.trend === "decreasing" ? "text-red-600 dark:text-red-400" :
-          "text-slate-900 dark:text-white"
-        );
-      }
-
-      // Show chart, hide empty state.
-      var empty = $("#forecast-empty");
-      var wrap  = $("#forecast-chart-wrap");
-      if (empty) empty.classList.add("hidden");
-      if (wrap)  { wrap.classList.remove("hidden"); }
-
-      // Explain when the server had to use a different method than requested.
-      var noteEl = $("#forecast-note");
-      if (noteEl) {
-        noteEl.textContent = data.note || "";
-        noteEl.classList.toggle("hidden", !data.note);
-      }
-      renderForecastEvaluation(data.evaluation, data.method);
-
-      requestAnimationFrame(function () {
-        LogSightCharts.renderForecastChart("chart-forecast", data);
-      });
-      updateStatPeriod(dsSelect.value);
-
-    } catch (err) {
-      window.alert(err.message || "Forecast failed.");
-    } finally {
-      if (runBtn) {
-        runBtn.disabled = false;
-        runBtn.innerHTML = '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg> Run Forecast';
-      }
-    }
-  }
-
-  // Back-test table: every method forecasts the hidden last part of the history
-  // and is scored against what really happened.
-  function renderForecastEvaluation(evaluation, usedMethod) {
-    var card = $("#forecast-evaluation");
-    var rows = $("#forecast-evaluation-rows");
-    var desc = $("#forecast-evaluation-desc");
-    if (!card || !rows) return;
-
-    var results = evaluation && Array.isArray(evaluation.results) ? evaluation.results : [];
-    if (!results.length) { card.classList.add("hidden"); return; }
-
-    if (desc) {
-      desc.textContent =
-        "The last " + evaluation.holdout_hours + " hours were hidden, each method predicted them from the " +
-        evaluation.training_hours + " hours before, and the predictions were compared with what really happened " +
-        "(real average: " + Number(evaluation.mean_actual).toLocaleString() + " requests/hour). Lower error is better.";
-    }
-
-    rows.innerHTML = "";
-    results.forEach(function (r) {
-      var isBest = r.method === evaluation.best_method;
-      var isUsed = r.method === usedMethod;
-      var tr = document.createElement("tr");
-      if (isUsed) tr.className = "bg-indigo-50/60 dark:bg-indigo-950/20";
-      tr.innerHTML =
-        '<td class="px-5 py-3 font-medium text-slate-800 dark:text-slate-200">' + escapeHtml(r.label) +
-          (isUsed ? ' <span class="ml-1 text-xs font-normal text-indigo-600 dark:text-indigo-400">· shown above</span>' : "") +
-          (isBest ? ' <span class="ml-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">most accurate</span>' : "") +
-        "</td>" +
-        '<td class="px-5 py-3 text-right tabular-nums text-slate-700 dark:text-slate-300">' + Number(r.mae).toLocaleString() + "</td>" +
-        '<td class="px-5 py-3 text-right tabular-nums text-slate-700 dark:text-slate-300">' + Number(r.rmse).toLocaleString() + "</td>";
-      rows.appendChild(tr);
+    $("#ex-save").addEventListener("click", function () {
+      var keys = exActive();
+      if (!keys.length) return;
+      var saved = load(STORE.saved, []);
+      var name = keys.map(function (k) { return state.ex[k].replace("T", " "); }).join(" · ");
+      saved.unshift({ name: name.length > 40 ? name.slice(0, 40) + "…" : name, filters: Object.assign({}, state.ex, { page: 1 }) });
+      save(STORE.saved, saved.slice(0, 8));
+      renderSaved();
+      toast("Filter saved. It will stay available under “Saved”.", "good");
     });
-    card.classList.remove("hidden");
+    $("#ex-saved").addEventListener("click", function (e) {
+      var use = e.target.closest("[data-apply-saved]"), del = e.target.closest("[data-delete-saved]");
+      var saved = load(STORE.saved, []);
+      if (use && saved[use.dataset.applySaved]) openExplore(saved[use.dataset.applySaved].filters);
+      if (del) { saved.splice(Number(del.dataset.deleteSaved), 1); save(STORE.saved, saved); renderSaved(); }
+    });
+
+    $("#ex-prev").addEventListener("click", function () { state.ex.page = Math.max(1, state.ex.page - 1); busy(fetchLogs()); });
+    $("#ex-next").addEventListener("click", function () { state.ex.page += 1; busy(fetchLogs()); });
+
+    // A row opens to show the original line and one-click ways to narrow down.
+    var toggle = function (row) {
+      var next = row.nextElementSibling;
+      if (next && next.classList.contains("log-detail")) { next.remove(); row.setAttribute("aria-expanded", "false"); return; }
+      $$(".log-detail", row.parentNode).forEach(function (d) { d.remove(); });
+      var detail = document.createElement("tr");
+      detail.className = "log-detail";
+      detail.innerHTML = '<td colspan="6"><div class="log-detail-inner"><code class="raw-line">' + esc(row.dataset.raw) + "</code>" +
+        '<span class="row-actions" style="justify-content:flex-start">' +
+        '<button type="button" class="btn btn-sm" data-explore=\'' + esc(JSON.stringify({ ip: row.dataset.ip })) + "'>All requests from " + esc(row.dataset.ip) + "</button>" +
+        '<button type="button" class="btn btn-sm" data-explore=\'' + esc(JSON.stringify({ endpoint: row.dataset.endpoint })) + "'>All requests for this path</button></span></div></td>";
+      row.after(detail);
+      row.setAttribute("aria-expanded", "true");
+    };
+    $("#ex-body").addEventListener("click", function (e) { var row = e.target.closest(".log-row"); if (row) toggle(row); });
+    $("#ex-body").addEventListener("keydown", function (e) {
+      if ((e.key === "Enter" || e.key === " ") && e.target.classList.contains("log-row")) { e.preventDefault(); toggle(e.target); }
+    });
   }
 
-  // -------------------------------------------------------------------------
-  // Anomaly Detection view
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Forecast
+  // ---------------------------------------------------------------------------
 
-  var anomalyInitDone = false;
+  var FC_HOW = {
+    ml: "<p><b>Random Forest.</b> A machine-learning model is trained on this dataset each time you open the page; nothing is pre-trained. Every past hour becomes one example described by the hour of day, the day of the week, and the traffic 1, 2, 3 and 24 hours earlier.</p><p>It predicts one hour ahead, adds that prediction to the history, and repeats. The shaded range comes from how much its 100 decision trees disagree. It needs at least three days of data.</p>",
+    moving_avg: "<p><b>Seasonal pattern.</b> The average traffic for each hour of the day is worked out across the whole log, giving a “typical day”. That shape is projected forward and scaled by the overall direction of travel.</p><p>The shaded range is a fixed 20% either side of the forecast.</p>",
+    linear_regression: "<p><b>Linear trend.</b> A straight line is fitted through the hourly history using ordinary least squares and extended forward. It shows direction clearly but cannot follow a daily rhythm.</p><p>The shaded range is a fixed 15% either side of the forecast.</p>",
+  };
 
-  async function initAnomalyView() {
-    if (!anomalyInitDone) {
-      anomalyInitDone = true;
-      var anomalyMethodSel = $("#anomaly-method");
-      if (anomalyMethodSel) {
-        anomalyMethodSel.addEventListener("change", function () {
-          var desc = $("#anomaly-method-desc");
-          if (!desc) return;
-          if (anomalyMethodSel.value === "isolation_forest") {
-            desc.innerHTML = '<strong>Isolation Forest (AI):</strong> A machine-learning model trained on this dataset. Each hour is described by its request count, error rate, number of unique visitors, average response size, requests per visitor and time of day. The model learns what a normal hour looks like and flags the hours that are easiest to separate from the rest, including hours that are only unusual in combination. Needs at least 24 hours of data.';
-          } else {
-            desc.innerHTML = '<strong>Statistical threshold:</strong> Works out the average request count and error rate per hour, then flags any hour that sits far above that average. Each measure is checked on its own.';
-          }
-        });
-      }
-    }
-    await populateSelect("anomaly-dataset");
+  async function loadForecast() {
+    var current = guard("forecast");
+    $("#fc-lede").innerHTML = skeleton(3, "skeleton-lede");
+    $("#fc-note").hidden = true;
+    contextLine("fc-context");
+    setSegmented($("#fc-method"), state.fc.method);
+    setSegmented($("#fc-horizon"), state.fc.periods);
 
-    var runBtn = $("#anomaly-run");
-    if (runBtn && !runBtn._bound) {
-      runBtn._bound = true;
-      runBtn.addEventListener("click", runAnomalyDetection);
-    }
-  }
-
-  async function runAnomalyDetection() {
-    var dsSelect  = $("#anomaly-dataset");
-    var sensSel   = $("#anomaly-sensitivity");
-    if (!dsSelect || !dsSelect.value) { window.alert("Please select a dataset first."); return; }
-
-    // Reset previous results.
-    var prevBanner = $("#anomaly-summary-banner");
-    if (prevBanner) prevBanner.classList.add("hidden");
-
-    var runBtn = $("#anomaly-run");
-    if (runBtn) { runBtn.disabled = true; runBtn.textContent = "Detecting…"; }
-
-    try {
-      var methodSel = $("#anomaly-method");
-      var data = await LogSightAPI.getAnomalies(dsSelect.value, {
-        sensitivity: sensSel ? sensSel.value : "medium",
-        method: methodSel ? methodSel.value : "statistical",
-      });
-
-      // Explain when the server had to use a different method than requested.
-      var noteEl = $("#anomaly-note");
-      if (noteEl) {
-        noteEl.textContent = data.note || "";
-        noteEl.classList.toggle("hidden", !data.note);
-      }
-
-      var summary = data.summary || {};
-      var cards   = $("#anomaly-summary-cards");
-      if (cards) { cards.classList.remove("hidden"); cards.classList.add("grid"); }
-
-      renderStatValue("anomaly-stat-total",  summary.total_anomalies,  "", "0");
-      renderStatValue("anomaly-stat-high",   summary.high_severity,    "", "0");
-      renderStatValue("anomaly-stat-medium", summary.medium_severity,  "", "0");
-      renderStatValue("anomaly-stat-low",    summary.low_severity,     "", "0");
-
-      // Show/hide chart area.
-      var empty = $("#anomaly-empty");
-      var wrap  = $("#anomaly-chart-wrap");
-      if (empty) empty.classList.add("hidden");
-      if (wrap)  wrap.classList.remove("hidden");
-
-      // Build historical series from all request-spike anomaly data.
-      // We re-use the historical data embedded in the anomalies response if present,
-      // otherwise fetch it separately.
-      var historicalData = data.historical_series || [];
-      if (!historicalData.length) {
-        // Fetch hourly trends for chart base series.
-        var trends = await LogSightAPI.getRequestFrequency(dsSelect.value, { interval: "hour", limit: 500 });
-        if (trends.available && trends.labels && trends.datasets && trends.datasets[0]) {
-          historicalData = trends.labels.map(function (lbl, i) {
-            return { label: lbl, value: trends.datasets[0].data[i] || 0 };
-          });
-        }
-      }
-
-      // The statistical method marks request spikes only (its error-rate
-      // findings are listed below); the Isolation Forest scores whole hours,
-      // so every flagged hour is marked on the chart.
-      var requestAnomalies = (data.anomalies || []).filter(function (a) {
-        return data.method === "isolation_forest" || a.type === "request_spike";
-      });
-
-      requestAnimationFrame(function () {
-        LogSightCharts.renderAnomalyChart("chart-anomalies", historicalData, requestAnomalies);
-      });
-
-      // Render anomaly list.
-      renderAnomalyList(data.anomalies || []);
-      updateStatPeriod(dsSelect.value);
-
-    } catch (err) {
-      window.alert(err.message || "Anomaly detection failed.");
-    } finally {
-      if (runBtn) {
-        runBtn.disabled = false;
-        runBtn.innerHTML = '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg> Detect Anomalies';
-      }
-    }
-  }
-
-  function renderAnomalyList(anomalies) {
-    var wrap   = $("#anomaly-list-wrap");
-    var list   = $("#anomaly-list");
-    var banner = $("#anomaly-summary-banner");
-    var bannerText = $("#anomaly-summary-text");
-    if (!wrap || !list) return;
-
-    if (!anomalies.length) {
-      wrap.classList.add("hidden");
-      if (banner) {
-        banner.className = "rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 dark:border-emerald-800/40 dark:bg-emerald-950/20";
-        banner.classList.remove("hidden");
-        if (bannerText) bannerText.textContent = "No anomalies detected — traffic and error patterns look normal for this dataset.";
-        if (bannerText) bannerText.className = "text-sm font-medium text-emerald-700 dark:text-emerald-300";
-      }
+    var data = await API.getTrafficForecast(state.active.id, state.fc);
+    if (!current()) return;
+    var fc = data.forecast || [], lede = $("#fc-lede");
+    if (!data.available || !fc.length) {
+      lede.textContent = "There is no hourly history in this dataset to forecast from.";
+      Charts.destroy("chart-forecast");
+      $("#fc-eval").hidden = true;
       return;
     }
 
-    // Build plain-English summary sentence.
-    var high   = anomalies.filter(function (a) { return a.severity === "high"; }).length;
-    var medium = anomalies.filter(function (a) { return a.severity === "medium"; }).length;
-    var low    = anomalies.filter(function (a) { return a.severity === "low"; }).length;
-    var parts  = [];
-    if (high)   parts.push(high   + " critical");
-    if (medium) parts.push(medium + " notable");
-    if (low)    parts.push(low    + " minor");
-    var summaryLine = "Found " + anomalies.length + " anomal" + (anomalies.length === 1 ? "y" : "ies") +
-      " — " + parts.join(", ") + ".";
+    var total = fc.reduce(function (a, p) { return a + p.value; }, 0), avg = total / fc.length;
+    var peak = fc.reduce(function (a, p) { return p.value > a.value ? p : a; }, fc[0]);
+    var usual = data.summary && data.summary.avg_historical;
+    var diff = usual ? (avg - usual) / usual * 100 : 0;
+    var against = !usual ? "" : Math.abs(diff) < 5 ? " That is <b>in line with</b> this log's usual " + num(usual) + " an hour."
+      : " That is <b>" + Math.abs(diff).toFixed(0) + "% " + (diff > 0 ? "above" : "below") + "</b> this log's usual " + num(usual) + " an hour.";
+    var horizon = fc.length >= 48 ? (fc.length / 24) + " days" : fc.length + " hours";
+    lede.innerHTML = "In the <b>" + horizon + "</b> after this log ends, expect about <span class=\"hl\">" + num(total) + " requests</span>: roughly <b>" + num(avg) +
+      " an hour</b>, peaking near <b>" + esc(peak.label) + "</b> at about " + num(peak.value) + "." + against;
 
-    if (banner) {
-      var isHigh = high > 0;
-      banner.className = "rounded-2xl border px-5 py-4 " + (
-        isHigh
-          ? "border-red-200 bg-red-50 dark:border-red-800/40 dark:bg-red-950/20"
-          : "border-amber-200 bg-amber-50 dark:border-amber-800/40 dark:bg-amber-950/20"
-      );
-      banner.classList.remove("hidden");
-      if (bannerText) {
-        bannerText.textContent = summaryLine;
-        bannerText.className = "text-sm font-medium " + (
-          isHigh
-            ? "text-red-700 dark:text-red-300"
-            : "text-amber-700 dark:text-amber-300"
-        );
-      }
-    }
+    var note = $("#fc-note");
+    note.hidden = !data.note;
+    $("span", note).textContent = data.note || "";
+    setSegmented($("#fc-method"), data.requested_method || state.fc.method);
 
-    wrap.classList.remove("hidden");
-    list.innerHTML = "";
+    Charts.forecast("chart-forecast", data);
+    $("#fc-caption").innerHTML = "The solid line is traffic recorded in the log; the dashed line continues from its last hour (<b>" + esc((data.historical[data.historical.length - 1] || {}).label || "") +
+      "</b>). Overall the history is <b>" + ({ increasing: "rising", decreasing: "falling", stable: "steady" }[data.trend] || "steady") + "</b>. Times are UTC.";
+    $("#fc-how").innerHTML = FC_HOW[data.method] || "";
 
-    var typeLabels = {
-      request_spike: "Traffic spike",
-      error_rate_spike: "Error spike",
-      traffic_drop: "Traffic drop",
-      unusual_pattern: "Unusual pattern",
-    };
-
-    anomalies.forEach(function (a) {
-      var typeLabel = typeLabels[a.type] || a.type;
-      var dotColor  = a.severity === "high"
-        ? "bg-red-500"
-        : a.severity === "medium" ? "bg-amber-400" : "bg-slate-400";
-
-      var item = document.createElement("div");
-      item.className = "flex items-start gap-4 px-5 py-4";
-      item.innerHTML =
-        '<span class="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ' + dotColor + '"></span>' +
-        '<div class="min-w-0 flex-1">' +
-          '<p class="text-sm font-medium text-slate-800 dark:text-slate-200">' +
-            escapeHtml(a.label || "") +
-            ' <span class="ml-1 text-xs font-normal text-slate-400 dark:text-slate-500">· ' + escapeHtml(typeLabel) + '</span>' +
-          '</p>' +
-          '<p class="mt-0.5 text-sm text-slate-500 dark:text-slate-400">' + escapeHtml(a.explanation || "") + '</p>' +
-        '</div>';
-      list.appendChild(item);
-    });
+    var ev = data.evaluation, section = $("#fc-eval");
+    section.hidden = !(ev && ev.results && ev.results.length);
+    if (section.hidden) return;
+    $("#fc-eval-desc").innerHTML = "The last <b>" + ev.holdout_hours + " hours</b> of the log were hidden. Each method predicted them from the " + num(ev.training_hours) +
+      " hours before, and was scored against what really happened (real average: " + num(ev.mean_actual) + " requests an hour). Smaller is better.";
+    var worst = Math.max.apply(null, ev.results.map(function (r) { return r.mae; })) || 1;
+    $("#fc-eval-body").innerHTML = ev.results.map(function (r, i) {
+      var shown = r.method === data.method, best = r.method === ev.best_method;
+      return '<tr class="' + (shown ? "is-current" : "") + '"><td><b>' + esc(r.label) + "</b>" +
+        (best ? ' <span class="tag tag-good">Most accurate</span>' : "") + (shown ? ' <span class="tag tag-accent">Shown above</span>' : "") + "</td>" +
+        '<td style="width:34%"><span class="rank-bar' + (best ? " is-accent" : "") + '" style="display:block;height:8px;--i:' + i + '"><i style="width:' + (r.mae / worst * 100) + '%"></i></span></td>' +
+        '<td class="r">' + Number(r.mae).toLocaleString("en") + '</td><td class="r">' + Number(r.rmse).toLocaleString("en") + "</td></tr>";
+    }).join("");
   }
 
-  // -------------------------------------------------------------------------
-  // Alerts view
-  // -------------------------------------------------------------------------
-
-  var alertsInitDone = false;
-
-  async function initAlertsView() {
-    if (!alertsInitDone) {
-      alertsInitDone = true;
-      var checkBtn = $("#alerts-check");
-      if (checkBtn && !checkBtn._bound) {
-        checkBtn._bound = true;
-        checkBtn.addEventListener("click", runAutoCheck);
-      }
-      var refreshBtn = $("#alerts-history-refresh");
-      if (refreshBtn && !refreshBtn._bound) {
-        refreshBtn._bound = true;
-        refreshBtn.addEventListener("click", loadAllAlertsHistory);
-      }
-    }
-
-    await populateSelect("alerts-dataset");
-
-    var dsSel = $("#alerts-dataset");
-    if (dsSel && !dsSel._alertsBound) {
-      dsSel._alertsBound = true;
-      dsSel.addEventListener("change", function () {
-        var banner  = $("#alerts-status-banner");
-        var results = $("#alerts-results");
-        if (banner)  banner.classList.add("hidden");
-        if (results) results.classList.add("hidden");
-      });
-    }
-
-    loadAllAlertsHistory();
+  function initForecast() {
+    initSegmented("fc-method", function (v) { state.fc.method = v; reload("forecast"); });
+    initSegmented("fc-horizon", function (v) { state.fc.periods = Number(v); reload("forecast"); });
   }
 
-  async function loadAllAlertsHistory() {
-    var wrap = $("#alerts-history-wrap");
-    if (!wrap) return;
-    wrap.innerHTML = '<p class="px-5 py-4 text-center text-xs text-slate-400">Loading…</p>';
-    try {
-      var data    = await LogSightAPI.getAllAlertsHistory(100);
-      var alerts  = data.alerts || [];
-      if (!alerts.length) {
-        wrap.innerHTML = '<p class="px-5 py-6 text-center text-sm text-slate-400">No alerts recorded yet. Run a health check or use the simulator\'s Spike buttons.</p>';
-        return;
-      }
-      wrap.innerHTML = "";
-      var table = document.createElement("div");
-      table.className = "overflow-x-auto";
-      var html = '<table class="min-w-full text-sm">' +
-        '<thead class="border-b border-slate-100 bg-slate-50/60 dark:border-slate-800 dark:bg-slate-800/20">' +
-        '<tr>' +
-        '<th class="px-5 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">Time</th>' +
-        '<th class="px-5 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">Dataset</th>' +
-        '<th class="px-5 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">Type</th>' +
-        '<th class="px-5 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">Severity</th>' +
-        '<th class="px-5 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">Message</th>' +
-        '</tr></thead>' +
-        '<tbody class="divide-y divide-slate-100 dark:divide-slate-800">';
+  // ---------------------------------------------------------------------------
+  // Anomalies
+  // ---------------------------------------------------------------------------
 
-      alerts.forEach(function (a) {
-        var sevClass = a.severity === "high"
-          ? "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300"
-          : a.severity === "medium"
-          ? "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
-          : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300";
-        var typeLabel = a.alert_type === "error_rate" ? "Error Rate" : a.alert_type === "request_spike" ? "Traffic Spike" : a.alert_type;
-        html +=
-          '<tr class="hover:bg-slate-50/60 dark:hover:bg-slate-800/30">' +
-          '<td class="whitespace-nowrap px-5 py-3 text-xs text-slate-500 dark:text-slate-400">' + escapeHtml(formatDate(a.triggered_at)) + '</td>' +
-          '<td class="px-5 py-3 text-xs font-medium text-indigo-600 dark:text-indigo-400">' + escapeHtml(a.dataset_name || "—") + '</td>' +
-          '<td class="px-5 py-3 text-xs text-slate-600 dark:text-slate-400">' + escapeHtml(typeLabel) + '</td>' +
-          '<td class="px-5 py-3"><span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ' + sevClass + '">' + escapeHtml(a.severity) + '</span></td>' +
-          '<td class="max-w-sm truncate px-5 py-3 text-xs text-slate-600 dark:text-slate-400" title="' + escapeHtml(a.message) + '">' + escapeHtml(a.message) + '</td>' +
-          '</tr>';
-      });
+  var AN_TYPES = { request_spike: "Traffic spike", error_rate_spike: "Error spike", traffic_drop: "Traffic drop", unusual_pattern: "Unusual pattern" };
+  var SEVERITY = { high: ["tag-high", "Critical"], medium: ["tag-medium", "Notable"], low: ["tag-low", "Minor"] };
+  var AN_HOW = {
+    isolation_forest: "<p><b>Isolation Forest.</b> An unsupervised machine-learning model trained on this dataset; it needs no labelled examples. Each hour is described by its request count, error rate, number of unique visitors, average response size, requests per visitor and time of day.</p><p>The model learns what an ordinary hour looks like and flags the hours that are easiest to separate from the rest, including hours that are only unusual <em>in combination</em>, such as normal volume from very few visitors. It needs at least 24 hours of data.</p>",
+    statistical: "<p><b>Statistical threshold.</b> The average and spread of the hourly request count and error rate are calculated, and any hour that sits far above the average is flagged. Each measure is checked on its own, so an hour that is only odd in combination will not be caught.</p><p>Sensitivity sets how far above average an hour must be: 3, 2 or 1.5 standard deviations.</p>",
+  };
 
-      html += '</tbody></table>';
-      table.innerHTML = html;
-      wrap.appendChild(table);
-    } catch (_) {
-      wrap.innerHTML = '<p class="px-5 py-4 text-sm text-red-500">Failed to load alert history.</p>';
-    }
+  function worstAnomaly(list) {
+    var rank = { high: 0, medium: 1, low: 2 };
+    return list.slice().sort(function (a, b) {
+      return (rank[a.severity] - rank[b.severity]) || ((a.score != null && b.score != null) ? a.score - b.score : b.value - a.value);
+    })[0] || null;
+  }
+  function reason(a) {
+    var text = String(a.explanation || "").replace(/^Isolation Forest flagged this hour:\s*/i, "");
+    return text.charAt(0).toUpperCase() + text.slice(1);
   }
 
-  async function runAutoCheck() {
-    var dsSel = $("#alerts-dataset");
-    if (!dsSel || !dsSel.value) { window.alert("Please select a dataset first."); return; }
+  async function loadAnomalies() {
+    var current = guard("anomalies");
+    $("#an-lede").innerHTML = skeleton(3, "skeleton-lede");
+    $("#an-note").hidden = true;
+    contextLine("an-context");
+    setSegmented($("#an-method"), state.an.method);
+    setSegmented($("#an-sensitivity"), state.an.sensitivity);
 
-    var checkBtn = $("#alerts-check");
-    if (checkBtn) { checkBtn.disabled = true; checkBtn.textContent = "Checking…"; }
+    var data = await API.getAnomalies(state.active.id, state.an);
+    if (!current()) return;
+    if (!data.available) { $("#an-lede").textContent = "Anomaly detection could not be run on this dataset."; return; }
+    state.an.data = data;
 
-    try {
-      var data = await LogSightAPI.autoCheckAlerts(dsSel.value);
-      renderAutoCheckResults(data);
-    } catch (err) {
-      window.alert(err.message || "Health check failed.");
-    } finally {
-      if (checkBtn) {
-        checkBtn.disabled = false;
-        checkBtn.innerHTML =
-          '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
-          '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>' +
-          ' Run Health Check';
-      }
-    }
+    var list = data.anomalies || [], s = data.summary || {}, series = data.historical_series || [];
+    var worst = worstAnomaly(list);
+    $("#an-lede").innerHTML = !series.length ? "This dataset has no hourly history to analyse."
+      : !list.length ? '<span class="hl-good">Nothing stands out.</span> All <b>' + num(series.length) + " hours</b> in this log look consistent with one another at this sensitivity."
+      : '<span class="hl">' + list.length + " of " + num(series.length) + " hours</span> stand out" +
+        (s.high_severity ? ', <span class="hl-bad">' + s.high_severity + " of them critical</span>" : "") + ". The most unusual was <b>" + esc(worst.label) + "</b>: " + esc(reason(worst));
+
+    var note = $("#an-note");
+    note.hidden = !data.note;
+    $("span", note).textContent = data.note || "";
+
+    var flagged = {};
+    list.forEach(function (a) { flagged[a.label] = (SEVERITY[a.severity] || SEVERITY.low)[1] + " · " + (AN_TYPES[a.type] || a.type); });
+    Charts.anomalies("chart-anomalies", series, flagged);
+
+    $("#an-tally").innerHTML = ["high", "medium", "low"].map(function (k) {
+      var count = s[k + "_severity"] || 0;
+      return '<span class="tally-item"><span class="tally-value">' + count + '</span><span class="tag ' + SEVERITY[k][0] + '">' + SEVERITY[k][1] + "</span></span>";
+    }).join("");
+    $("#an-how").innerHTML = AN_HOW[data.method] || "";
+    renderAnomalyList();
   }
 
-  function renderAutoCheckResults(data) {
-    var banner     = $("#alerts-status-banner");
-    var bannerText = $("#alerts-status-text");
-    var resultsEl  = $("#alerts-results");
-    if (!banner || !resultsEl) return;
-
-    var status = data.status || "ok";
-    var statusConfig = {
-      ok:       { border: "border-emerald-200", bg: "bg-emerald-50 dark:bg-emerald-950/20", text: "text-emerald-700 dark:text-emerald-300", label: "All clear — no issues detected." },
-      warning:  { border: "border-amber-200",   bg: "bg-amber-50 dark:bg-amber-950/20",     text: "text-amber-700 dark:text-amber-300",   label: "Warning — one or more checks need attention." },
-      critical: { border: "border-red-200",      bg: "bg-red-50 dark:bg-red-950/20",         text: "text-red-700 dark:text-red-300",       label: "Critical — immediate attention required." },
-    };
-    var cfg = statusConfig[status] || statusConfig.ok;
-
-    banner.className = "rounded-2xl border px-5 py-4 " + cfg.border + " " + cfg.bg;
-    banner.classList.remove("hidden");
-    if (bannerText) {
-      bannerText.textContent = cfg.label;
-      bannerText.className   = "text-sm font-semibold " + cfg.text;
+  function renderAnomalyList() {
+    var data = state.an.data, host = $("#an-list");
+    if (!data) return;
+    var rank = { high: 0, medium: 1, low: 2 };
+    var list = (data.anomalies || []).filter(function (a) { return state.an.filter === "all" || a.severity === state.an.filter; })
+      .sort(function (a, b) { return (rank[a.severity] - rank[b.severity]) || String(a.timestamp).localeCompare(String(b.timestamp)); });
+    if (!list.length) {
+      host.innerHTML = '<p class="faint" style="padding:var(--space-md) var(--space-xs)">' +
+        ((data.anomalies || []).length ? "No flagged hours at this severity." : "No hours were flagged.") + "</p>";
+      return;
     }
-
-    resultsEl.innerHTML = "";
-    resultsEl.classList.remove("hidden");
-    resultsEl.classList.add("grid");
-
-    (data.results || []).forEach(function (r) {
-      var cardStatus = r.status || "ok";
-      var cardCfg = {
-        ok:       { border: "border-emerald-200/80", icon: "text-emerald-500", dot: "bg-emerald-500", label: "OK" },
-        warning:  { border: "border-amber-200/80",   icon: "text-amber-500",   dot: "bg-amber-400",   label: "Warning" },
-        critical: { border: "border-red-200/80",      icon: "text-red-500",     dot: "bg-red-500",     label: "Critical" },
-      }[cardStatus] || { border: "border-slate-200/80", icon: "text-slate-400", dot: "bg-slate-400", label: "OK" };
-
-      var card = document.createElement("div");
-      card.className = "card-lift rounded-2xl border " + cardCfg.border + " bg-white p-5 shadow-card dark:bg-slate-900/60";
-      card.innerHTML =
-        '<div class="flex items-center justify-between gap-2">' +
-          '<p class="text-sm font-semibold text-slate-800 dark:text-slate-200">' + escapeHtml(r.label || r.check) + '</p>' +
-          '<span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ' +
-            (cardStatus === "ok" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300" :
-             cardStatus === "warning" ? "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300" :
-             "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300") + '">' +
-            '<span class="h-1.5 w-1.5 rounded-full ' + cardCfg.dot + '"></span>' +
-            escapeHtml(cardCfg.label) +
-          '</span>' +
-        '</div>' +
-        '<p class="mt-3 text-sm text-slate-600 dark:text-slate-400">' + escapeHtml(r.message || "") + '</p>';
-      resultsEl.appendChild(card);
-    });
+    host.innerHTML = list.map(function (a, i) {
+      var sev = SEVERITY[a.severity] || SEVERITY.low;
+      var start = String(a.timestamp || "").slice(0, 13);
+      var link = start ? JSON.stringify({ from: start + ":00", to: start + ":59:59" }) : "";
+      return '<div class="finding"><div class="finding-head row-enter" style="--i:' + Math.min(i, 20) + '">' +
+        '<span><span class="tag ' + sev[0] + '">' + sev[1] + "</span></span>" +
+        '<span><span class="finding-title"><span class="finding-when">' + esc(a.label) + "</span> · " + esc(AN_TYPES[a.type] || a.type) + "</span>" +
+        '<p class="finding-text">' + esc(reason(a)) + "</p></span>" +
+        (link ? '<button type="button" class="btn btn-sm btn-quiet" data-explore=\'' + esc(link) + "'>View requests</button>" : "<span></span>") +
+        "</div></div>";
+    }).join("");
   }
 
-  // -------------------------------------------------------------------------
-  // Reports view
-  // -------------------------------------------------------------------------
-
-  async function initReportsView() {
-    await populateSelect("report-dataset");
-
-    var reportDataset = $("#report-dataset");
-    if (reportDataset && !reportDataset._bound_period) {
-      reportDataset._bound_period = true;
-      reportDataset.addEventListener("change", function () {
-        updateStatPeriod(reportDataset.value);
-      });
-    }
-
-    var downloadBtn = $("#report-download");
-    if (downloadBtn && !downloadBtn._bound) {
-      downloadBtn._bound = true;
-      downloadBtn.addEventListener("click", function () {
-        var dsSel    = $("#report-dataset");
-        var fmtSel   = $("#report-format");
-        if (!dsSel || !dsSel.value) { window.alert("Please select a dataset first."); return; }
-        try {
-          LogSightAPI.downloadReport(dsSel.value, fmtSel ? fmtSel.value : "csv");
-        } catch (err) {
-          window.alert(err.message || "Download failed.");
-        }
-      });
-    }
+  function initAnomalies() {
+    initSegmented("an-method", function (v) { state.an.method = v; reload("anomalies"); });
+    initSegmented("an-sensitivity", function (v) { state.an.sensitivity = v; reload("anomalies"); });
+    initSegmented("an-filter", function (v) { state.an.filter = v; renderAnomalyList(); });
   }
 
-  // -------------------------------------------------------------------------
-  // Nav binding
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Security
+  // ---------------------------------------------------------------------------
 
-  function bindNav() {
-    $all("[data-route]").forEach(function (link) {
-      link.addEventListener("click", function (event) {
-        event.preventDefault();
-        navigate(link.getAttribute("data-route"));
-        if (typeof window.closeTopNavMenus === "function") window.closeTopNavMenus();
-        if (typeof window.closeMobileSidebar === "function" && window.matchMedia("(max-width: 1023px)").matches) {
-          window.closeMobileSidebar();
-        }
-      });
-    });
+  var SOURCES = { ai: ["tag-accent", "AI classifier"], rule: ["tag-low", "Behaviour rule"], combined: ["tag-accent", "Rules + AI"] };
+
+  function riskLevel(score) {
+    if (score >= 70) return { word: "High risk", tag: "tag-high", cls: "hl-bad" };
+    if (score >= 40) return { word: "Moderate risk", tag: "tag-medium", cls: "hl-warn" };
+    if (score > 0) return { word: "Low risk", tag: "tag-low", cls: "" };
+    return { word: "No threats found", tag: "tag-good", cls: "hl-good" };
   }
 
-  // -------------------------------------------------------------------------
-  // Boot
-  // -------------------------------------------------------------------------
-
-  // -------------------------------------------------------------------------
-  // Dashboard date filter
-  // -------------------------------------------------------------------------
-
-  function initDashboardDateFilter() {
-    var toggleBtn = $("#dash-date-toggle");
-    var filterRow = $("#dashboard-date-filter");
-    var activeDot = $("#dash-filter-active");
-    var clearBtn  = $("#dash-date-clear");
-    var fromIn    = $("#dash-date-from");
-    var toIn      = $("#dash-date-to");
-
-    if (toggleBtn && !toggleBtn._bound) {
-      toggleBtn._bound = true;
-      toggleBtn.addEventListener("click", function () {
-        var isOpen = !filterRow.classList.contains("hidden");
-        if (isOpen) {
-          filterRow.classList.add("hidden");
-          filterRow.classList.remove("flex");
-        } else {
-          filterRow.classList.remove("hidden");
-          filterRow.classList.add("flex");
-        }
-      });
-    }
-    if (clearBtn && !clearBtn._bound) {
-      clearBtn._bound = true;
-      clearBtn.addEventListener("click", function () {
-        if (fromIn) fromIn.value = "";
-        if (toIn)   toIn.value   = "";
-        filterRow.classList.add("hidden");
-        filterRow.classList.remove("flex");
-        if (activeDot) activeDot.classList.add("hidden");
-        dashboardReady = false;
-        loadDashboardData();
-      });
-    }
-    if (fromIn && !fromIn._dboundFilter) {
-      fromIn._dboundFilter = true;
-      fromIn.addEventListener("change", function () {
-        _clampDateInput(fromIn);
-        if (toIn && fromIn.value) {
-          toIn.min = fromIn.value;
-          if (toIn.value && toIn.value < fromIn.value) toIn.value = fromIn.value;
-        } else if (toIn) {
-          toIn.min = _dashDateMin;
-        }
-        _updateFilterDot();
-        dashboardReady = false;
-        loadDashboardData();
-      });
-    }
-    if (toIn && !toIn._dboundFilter) {
-      toIn._dboundFilter = true;
-      toIn.addEventListener("change", function () {
-        _clampDateInput(toIn);
-        if (fromIn && toIn.value) {
-          fromIn.max = toIn.value;
-          if (fromIn.value && fromIn.value > toIn.value) fromIn.value = toIn.value;
-        } else if (fromIn) {
-          fromIn.max = _dashDateMax;
-        }
-        _updateFilterDot();
-        dashboardReady = false;
-        loadDashboardData();
-      });
-    }
-
-    function _clampDateInput(input) {
-      if (!input.value) return;
-      if (_dashDateMin && input.value < _dashDateMin) input.value = _dashDateMin;
-      if (_dashDateMax && input.value > _dashDateMax) input.value = _dashDateMax;
-    }
-
-    function _updateFilterDot() {
-      var active = !!(fromIn && fromIn.value) || !!(toIn && toIn.value);
-      if (activeDot) activeDot.classList.toggle("hidden", !active);
-    }
+  function evidenceItem(e) {
+    var what = [e.ip, e.endpoint].filter(Boolean).join(" → ");
+    var meta = [];
+    if (e.request_count != null) meta.push(num(e.request_count) + " " + plural(e.request_count, "request"));
+    if (e.confidence != null) meta.push(Math.round(e.confidence * 100) + "% confident");
+    if (e.distinct_paths != null) meta.push(e.distinct_paths + " different paths");
+    if (e.error_count != null) meta.push(num(e.error_count) + " errors");
+    if (e.status_code != null) meta.push("status " + e.status_code);
+    if (Array.isArray(e.reasons)) meta.push(e.reasons.join(" + "));
+    var filter = e.endpoint ? { endpoint: e.endpoint.slice(0, 200), ip: e.ip || "" } : e.ip ? { ip: e.ip } : null;
+    return '<li><span class="path">' + esc(what.length > 220 ? what.slice(0, 220) + "…" : what) + '</span><span class="meta">' + esc(meta.join(" · ")) + "</span>" +
+      (filter ? '<button type="button" class="link-btn" data-explore=\'' + esc(JSON.stringify(filter)) + "'>View requests</button>" : "") + "</li>";
   }
 
-  function getDashboardDateFilter() {
-    var from = $("#dash-date-from");
-    var to   = $("#dash-date-to");
-    return {
-      dateFrom: from && from.value ? from.value : null,
-      dateTo:   to   && to.value   ? to.value   : null,
-    };
-  }
+  async function loadSecurity() {
+    var current = guard("security");
+    $("#se-lede").innerHTML = skeleton(2, "skeleton-lede");
+    $("#se-score-value").textContent = "—";
+    $("#se-classes").innerHTML = skeleton(5);
+    $("#se-findings").innerHTML = '<div style="padding:var(--space-md) 0">' + skeleton(4) + "</div>";
+    contextLine("se-context");
 
-  // -------------------------------------------------------------------------
-  // Security Insights
-  // -------------------------------------------------------------------------
-
-  async function initSecurityView() {
-    await populateSelect("security-dataset");
-    var runBtn = $("#security-run");
-    if (runBtn && !runBtn._bound) {
-      runBtn._bound = true;
-      runBtn.addEventListener("click", runSecurityAnalysis);
+    var data;
+    try { data = await API.getSecurityInsights(state.active.id); }
+    catch (err) {
+      if (!current()) return;
+      $("#se-lede").textContent = "The security analysis could not be run on this dataset.";
+      $("#se-classes").innerHTML = ""; $("#se-findings").innerHTML = "";
+      return;
     }
-  }
+    if (!current()) return;
 
-  async function runSecurityAnalysis() {
-    var dsSel = $("#security-dataset");
-    if (!dsSel || !dsSel.value) { window.alert("Please select a dataset first."); return; }
-    var runBtn = $("#security-run");
-    if (runBtn) { runBtn.disabled = true; runBtn.textContent = "Analysing…"; }
-    var empty = $("#security-empty");
-    if (empty) empty.classList.add("hidden");
+    var score = data.risk_score || 0, level = riskLevel(score), findings = data.findings || [];
+    countUp($("#se-score-value"), score);
+    $("#se-score-pin").style.setProperty("--score", "0%");
+    requestAnimationFrame(function () { $("#se-score-pin").style.setProperty("--score", Math.min(100, score) + "%"); });
 
-    try {
-      var data = await LogSightAPI.getSecurityInsights(dsSel.value);
-      renderSecurityResults(data);
-      updateStatPeriod(dsSel.value);
-    } catch (err) {
-      window.alert(err.message || "Security analysis failed.");
-    } finally {
-      if (runBtn) {
-        runBtn.disabled = false;
-        runBtn.innerHTML =
-          '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /></svg> Run Analysis';
-      }
-    }
-  }
+    var order = { high: 0, medium: 1, low: 2 };
+    var lead = findings.slice().sort(function (a, b) { return (order[a.severity] - order[b.severity]) || (b.count - a.count); })
+      .filter(function (f) { return f.source !== "combined"; }).slice(0, 2)
+      .map(function (f) { return "<b>" + esc(f.title.replace(/ detected$/i, "").toLowerCase()) + "</b>"; });
+    $("#se-lede").innerHTML = '<span class="' + level.cls + '"><b>' + level.word + ".</b></span> " +
+      (findings.length ? findings.length + " " + plural(findings.length, "finding") + " in this log" + (lead.length ? ", led by " + lead.join(" and ") + "." : ".")
+                       : "Neither the behaviour rules nor the classifier found anything suspicious in this log.");
 
-  function renderSecurityResults(data) {
-    var banner   = $("#security-banner");
-    var summary  = $("#security-summary");
-    var scoreBdg = $("#security-score-badge");
-    var findingsEl = $("#security-findings");
-    var empty    = $("#security-empty");
-
-    var score = data.risk_score || 0;
-    var scoreColor = score >= 60 ? "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300"
-                   : score >= 30 ? "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
-                   : "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300";
-    var bannerColor = score >= 60 ? "border-red-200 bg-red-50 dark:border-red-800/40 dark:bg-red-950/20"
-                    : score >= 30 ? "border-amber-200 bg-amber-50 dark:border-amber-800/40 dark:bg-amber-950/20"
-                    : "border-emerald-200 bg-emerald-50 dark:border-emerald-800/40 dark:bg-emerald-950/20";
-
-    if (banner) {
-      banner.className = "rounded-2xl border px-5 py-4 " + bannerColor;
-      banner.classList.remove("hidden");
-    }
-    if (summary) summary.textContent = data.summary || "Analysis complete.";
-    if (scoreBdg) {
-      scoreBdg.textContent = "Risk: " + score + "/100";
-      scoreBdg.className = "rounded-full px-3 py-1 text-sm font-bold " + scoreColor;
-    }
-
-    renderSecurityClassification(data.classification);
-
-    if (findingsEl) {
-      findingsEl.innerHTML = "";
-      var findings = data.findings || [];
-      if (!findings.length) {
-        if (empty) {
-          empty.classList.remove("hidden");
-          var emptyText = $("p", empty);
-          if (emptyText) emptyText.textContent = "No security findings for this dataset.";
-        }
-        return;
-      }
-      var sourceBadges = {
-        ai:       ["AI classifier", "bg-indigo-100 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300"],
-        rule:     ["Behaviour rule", "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"],
-        combined: ["Rules + AI", "bg-violet-100 text-violet-700 dark:bg-violet-950/40 dark:text-violet-300"],
-      };
-      findings.forEach(function (f) {
-        var severityBorder = f.severity === "high"
-          ? "border-red-200/80 dark:border-red-800/30"
-          : "border-amber-200/80 dark:border-amber-800/30";
-        var dotClass = f.severity === "high" ? "bg-red-500" : "bg-amber-400";
-
-        var card = document.createElement("div");
-        card.className = "card-lift rounded-2xl border " + severityBorder + " bg-white p-5 shadow-card dark:bg-slate-900/60";
-
-        var evidenceHtml = "";
-        if (f.evidence && f.evidence.length) {
-          evidenceHtml = '<ul class="mt-3 space-y-1">';
-          f.evidence.slice(0, 5).forEach(function (e) {
-            evidenceHtml += '<li class="break-all font-mono text-xs text-slate-500 dark:text-slate-400">' +
-              escapeHtml(securityEvidenceLine(e)) + "</li>";
-          });
-          if (f.evidence.length > 5) evidenceHtml += '<li class="text-xs text-slate-400">…and ' + (f.evidence.length - 5) + ' more</li>';
-          evidenceHtml += '</ul>';
-        }
-
-        var badge = sourceBadges[f.source];
-        var badgeHtml = badge
-          ? ' <span class="ml-2 rounded-full px-2 py-0.5 align-middle text-xs font-medium ' + badge[1] + '">' + badge[0] + "</span>"
-          : "";
-
-        card.innerHTML =
-          '<div class="flex items-start gap-3">' +
-            '<span class="mt-1 h-2.5 w-2.5 shrink-0 rounded-full ' + dotClass + '"></span>' +
-            '<div class="min-w-0 flex-1">' +
-              '<p class="font-semibold text-slate-800 dark:text-slate-200">' + escapeHtml(f.title || f.type) + badgeHtml + '</p>' +
-              '<p class="mt-1 text-sm text-slate-600 dark:text-slate-400">' + escapeHtml(f.description || "") + '</p>' +
-              evidenceHtml +
-            '</div>' +
-          '</div>';
-        findingsEl.appendChild(card);
-      });
-    }
-  }
-
-  // One evidence row, whichever kind of finding it belongs to.
-  function securityEvidenceLine(e) {
-    var parts = [];
-    if (e.ip) parts.push(e.ip);
-    if (e.endpoint) parts.push(e.endpoint);
-    var line = parts.join(" → ");
-    var details = [];
-    if (e.request_count != null) details.push(Number(e.request_count).toLocaleString() + " request" + (e.request_count === 1 ? "" : "s"));
-    if (e.confidence != null)    details.push(Math.round(e.confidence * 100) + "% confidence");
-    if (e.distinct_paths != null) details.push(e.distinct_paths + " different paths");
-    if (e.error_count != null)   details.push(Number(e.error_count).toLocaleString() + " errors");
-    if (e.status_code != null)   details.push("status " + e.status_code);
-    if (Array.isArray(e.reasons)) details.push(e.reasons.join(" + "));
-    return details.length ? line + "  (" + details.join(", ") + ")" : line;
-  }
-
-  // Per-class breakdown of what the request classifier found.
-  function renderSecurityClassification(c) {
-    var card  = $("#security-classification");
-    var rows  = $("#security-classification-rows");
-    var desc  = $("#security-classification-desc");
-    var model = $("#security-classification-model");
-    if (!card || !rows) return;
-    if (!c) { card.classList.add("hidden"); return; }
-
-    card.classList.remove("hidden");
-    rows.innerHTML = "";
-
+    // Classifier breakdown.
+    var c = data.classification || {};
     if (!c.available) {
-      if (desc)  desc.textContent = c.note || "The request classifier is not available.";
-      if (model) model.textContent = "Only the behaviour rules were used for this report.";
+      $("#se-class-desc").textContent = "";
+      $("#se-classes").innerHTML = '<div class="notice notice-warn">' + icon("info") + "<span>" + esc(c.note || "The request classifier is not available.") + " Only the behaviour rules were used for this report.</span></div>";
+      $("#se-model").textContent = "";
+    } else {
+      $("#se-class-desc").innerHTML = "It read <b>" + num(c.requests_analysed) + " requests</b> (" + num(c.distinct_urls) + " different URLs) and labelled <b>" +
+        num(c.flagged_requests) + "</b> of them (" + c.flagged_share + "%) as attacks." + (c.note ? " " + esc(c.note) : "");
+      var largest = Math.max.apply(null, c.classes.map(function (k) { return k.requests; }).concat([1]));
+      $("#se-classes").innerHTML = c.classes.map(function (k, i) {
+        return '<div class="class-row' + (k.requests ? "" : " is-zero") + '"><span><b>' + esc(k.label) + "</b></span>" +
+          '<span class="rank-bar ' + (k.severity === "high" ? "is-bad" : "is-warn") + '" style="--i:' + i + '"><i style="width:' + (k.requests ? Math.max(1.5, k.requests / largest * 100) : 0) + '%"></i></span>' +
+          '<span class="num nowrap">' + (k.requests ? "<b>" + num(k.requests) + "</b> " + plural(k.requests, "request") + " · " + num(k.unique_ips) + " " + plural(k.unique_ips, "client") : "none found") + "</span></div>";
+      }).join("");
+      var m = c.model || {}, bits = [esc(m.algorithm || "Machine-learning classifier")];
+      if (m.training_examples) bits.push("trained on " + num(m.training_examples) + " labelled examples");
+      if (m.holdout_accuracy != null) bits.push((m.holdout_accuracy * 100).toFixed(1) + "% accurate on attack patterns held out of training");
+      bits.push("a request is reported only at " + Math.round((c.threshold || 0.7) * 100) + "% confidence or more");
+      $("#se-model").innerHTML = bits.join(" · ") + ".";
+    }
+
+    // Findings, most severe first.
+    $("#se-findings").innerHTML = findings.length ? findings.map(function (f, i) {
+      var sev = f.severity === "high" ? ["tag-high", "High"] : ["tag-medium", "Medium"];
+      var src = SOURCES[f.source] || SOURCES.rule, ev = f.evidence || [];
+      return '<details class="finding row-enter" style="--i:' + i + '"><summary>' +
+        '<span><span class="tag ' + sev[0] + '">' + sev[1] + "</span></span>" +
+        '<span><span class="finding-title">' + esc(f.title) + ' <span class="tag tag-plain ' + src[0] + '">' + src[1] + "</span></span>" +
+        '<p class="finding-text">' + esc(f.description) + "</p></span>" + icon("chevron-right") + "</summary>" +
+        '<div class="finding-body">' + (ev.length ? '<p class="label-sm">Evidence' + (ev.length >= 10 ? " (first " + ev.length + ")" : "") + '</p><ul class="evidence">' + ev.map(evidenceItem).join("") + "</ul>"
+                                                 : '<p class="faint">No itemised evidence for this finding.</p>') + "</div></details>";
+    }).join("") : '<p class="faint" style="padding:var(--space-md) var(--space-xs)">No findings.</p>';
+  }
+
+  // ---------------------------------------------------------------------------
+  // Compare
+  // ---------------------------------------------------------------------------
+
+  async function loadCompare() {
+    var ready = completed(), a = $("#cmp-a"), b = $("#cmp-b");
+    var options = ready.map(function (d) { return '<option value="' + esc(d.id) + '">' + esc(d.name) + "</option>"; }).join("");
+    var keepA = a.value, keepB = b.value;
+    a.innerHTML = options; b.innerHTML = options;
+    var has = function (id) { return ready.some(function (d) { return d.id === id; }); };
+    a.value = has(keepA) ? keepA : (state.active ? state.active.id : (ready[0] || {}).id || "");
+    var other = ready.filter(function (d) { return d.id !== a.value; })[0];
+    b.value = has(keepB) && keepB !== a.value ? keepB : (other ? other.id : "");
+
+    if (ready.length < 2) {
+      $("#cmp-results").hidden = true; $("#cmp-empty").hidden = false;
+      $("#cmp-empty-title").textContent = "Two datasets are needed";
+      $("#cmp-empty-text").innerHTML = 'Comparison sets one log against another. Upload a second access log on the <a href="#/datasets">Datasets</a> page to use it.';
       return;
     }
-
-    if (desc) {
-      desc.textContent =
-        "Read " + Number(c.requests_analysed).toLocaleString() + " requests (" +
-        Number(c.distinct_urls).toLocaleString() + " different URLs) and labelled " +
-        Number(c.flagged_requests).toLocaleString() + " of them (" + c.flagged_share + "%) as attacks." +
-        (c.note ? " " + c.note : "");
-    }
-
-    var largest = Math.max.apply(null, (c.classes || []).map(function (k) { return k.requests; }).concat([1]));
-    (c.classes || []).forEach(function (k) {
-      var width = k.requests ? Math.max(2, Math.round(k.requests / largest * 100)) : 0;
-      var barColor = k.severity === "high" ? "bg-red-500" : "bg-amber-400";
-      var row = document.createElement("div");
-      row.innerHTML =
-        '<div class="flex items-baseline justify-between gap-3 text-sm">' +
-          '<span class="font-medium text-slate-700 dark:text-slate-300">' + escapeHtml(k.label) + "</span>" +
-          '<span class="tabular-nums text-slate-500 dark:text-slate-400">' +
-            (k.requests
-              ? Number(k.requests).toLocaleString() + " requests · " + Number(k.unique_ips).toLocaleString() + " clients"
-              : "none found") +
-          "</span>" +
-        "</div>" +
-        '<div class="mt-1 h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">' +
-          '<div class="h-full rounded-full ' + barColor + '" style="width:' + width + '%"></div>' +
-        "</div>";
-      rows.appendChild(row);
-    });
-
-    if (model) {
-      var m = c.model || {};
-      var bits = [m.algorithm || "Machine-learning classifier"];
-      if (m.training_examples) bits.push("trained on " + Number(m.training_examples).toLocaleString() + " labelled examples");
-      if (m.holdout_accuracy != null) bits.push((m.holdout_accuracy * 100).toFixed(1) + "% accuracy on attack patterns held out of training");
-      bits.push("reports a request only when at least " + Math.round((c.threshold || 0.7) * 100) + "% confident");
-      model.textContent = bits.join(" · ");
-    }
+    await runCompare();
   }
 
-  // -------------------------------------------------------------------------
-  // Dataset Comparison
-  // -------------------------------------------------------------------------
-
-  async function initCompareView() {
-    await populateSelect("compare-dataset-a");
-    await populateSelect("compare-dataset-b");
-    var runBtn = $("#compare-run");
-    if (runBtn && !runBtn._bound) {
-      runBtn._bound = true;
-      runBtn.addEventListener("click", runComparison);
-    }
+  function delta(value, unit, badWhenUp) {
+    if (value == null || isNaN(value)) return '<span class="delta-flat">—</span>';
+    var n = Number(value);
+    if (Math.abs(n) < 0.05) return '<span class="delta-flat">no change</span>';
+    var colour = badWhenUp ? (n > 0 ? "color:var(--bad)" : "color:var(--good)") : "";
+    return '<span class="' + (n > 0 ? "delta-up" : "delta-down") + '" style="' + colour + '">' + Math.abs(n).toFixed(1) + unit + " " + (n > 0 ? "higher" : "lower") + "</span>";
   }
 
-  async function runComparison() {
-    var selA = $("#compare-dataset-a");
-    var selB = $("#compare-dataset-b");
-    if (!selA || !selA.value || !selB || !selB.value) {
-      window.alert("Please select both datasets."); return;
+  async function runCompare() {
+    var current = guard("compare"), idA = $("#cmp-a").value, idB = $("#cmp-b").value;
+    var results = $("#cmp-results"), empty = $("#cmp-empty");
+    if (!idA || !idB || idA === idB) {
+      results.hidden = true; empty.hidden = false;
+      $("#cmp-empty-title").textContent = "Choose two different datasets";
+      $("#cmp-empty-text").textContent = "The baseline and the comparison are currently the same log.";
+      return;
     }
-    if (selA.value === selB.value) {
-      window.alert("Please select two different datasets."); return;
-    }
-    var runBtn = $("#compare-run");
-    if (runBtn) { runBtn.disabled = true; runBtn.textContent = "Comparing…"; }
+    var data;
+    try { data = await API.compareDatasets(idA, idB); }
+    catch (err) { toast(err.message || "Comparison failed.", "bad"); return; }
+    if (!current()) return;
 
-    try {
-      var data = await LogSightAPI.compareDatasets(selA.value, selB.value);
-      renderComparisonResults(data);
-    } catch (err) {
-      window.alert(err.message || "Comparison failed.");
-    } finally {
-      if (runBtn) {
-        runBtn.disabled = false;
-        runBtn.innerHTML = '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg> Compare';
-      }
-    }
-  }
+    empty.hidden = true; results.hidden = false;
+    var A = data.dataset_a, B = data.dataset_b, ma = A.metrics || {}, mb = B.metrics || {}, d = data.deltas || {};
+    var visA = ma.unique_visitors != null ? ma.unique_visitors : ma.unique_ips, visB = mb.unique_visitors != null ? mb.unique_visitors : mb.unique_ips;
+    $("#cmp-name-a").textContent = A.name; $("#cmp-name-b").textContent = B.name;
+    $("#cmp-legend-a").textContent = A.name; $("#cmp-legend-b").textContent = B.name;
+    $("#cmp-top-a-title").textContent = "Most requested in " + A.name;
+    $("#cmp-top-b-title").textContent = "Most requested in " + B.name;
 
-  function renderComparisonResults(data) {
-    var results = $("#compare-results");
-    var empty   = $("#compare-empty");
-    var metricsEl = $("#compare-metrics-table");
-    var endpointsEl = $("#compare-endpoints-a");
-
-    if (!data.dataset_a || !data.dataset_b) return;
-    if (empty)   empty.classList.add("hidden");
-    if (results) { results.classList.remove("hidden"); }
-
-    var a = data.dataset_a.metrics || {};
-    var b = data.dataset_b.metrics || {};
-    var d = data.deltas || {};
-    var nameA = data.dataset_a.name || "Dataset A";
-    var nameB = data.dataset_b.name || "Dataset B";
-
-    function deltaSpan(val) {
-      if (val == null) return "";
-      var n = Number(val);
-      var sign = n > 0 ? "+" : "";
-      var cls  = n > 0 ? "text-red-500" : n < 0 ? "text-emerald-600" : "text-slate-400";
-      return '<span class="ml-1 text-xs ' + cls + '">' + sign + n.toFixed(1) + '</span>';
-    }
+    var vol = Number(d.total_requests || 0), err = Number(d.error_rate || 0);
+    $("#cmp-lede").innerHTML = "<b>" + esc(B.name) + "</b> handled " +
+      (Math.abs(vol) < 0.05 ? "about the same number of requests as" : '<span class="hl">' + Math.abs(vol).toFixed(0) + "% " + (vol > 0 ? "more" : "fewer") + " requests</span> than") +
+      " <b>" + esc(A.name) + "</b>, and its error rate is " +
+      (Math.abs(err) < 0.05 ? "the same" : '<span class="' + (err > 0 ? "hl-bad" : "hl-good") + '">' + Math.abs(err).toFixed(1) + " points " + (err > 0 ? "higher" : "lower") + "</span>") +
+      " (" + pct(mb.error_rate) + " against " + pct(ma.error_rate) + ").";
 
     var rows = [
-      ["Total Requests",    formatNumber(a.total_requests),  formatNumber(b.total_requests),  d.total_requests],
-      ["Error Rate (%)",    a.error_rate != null ? Number(a.error_rate).toFixed(2) + "%" : "—", b.error_rate != null ? Number(b.error_rate).toFixed(2) + "%" : "—", d.error_rate],
-      ["Avg Response Size", a.avg_response_size ? formatNumber(a.avg_response_size) + " B" : "—", b.avg_response_size ? formatNumber(b.avg_response_size) + " B" : "—", null],
-      ["Unique Visitors",   formatNumber(a.unique_visitors), formatNumber(b.unique_visitors),  d.unique_visitors],
+      ["Requests", num(ma.total_requests), num(mb.total_requests), delta(d.total_requests, "%")],
+      ["Error rate", pct(ma.error_rate, 2), pct(mb.error_rate, 2), delta(d.error_rate, " pts", true)],
+      ["Unique visitors", num(visA), num(visB), delta(d.unique_visitors, "%")],
+      ["Average response", bytes(ma.avg_response_size), bytes(mb.avg_response_size), delta(d.avg_response_size, "%")],
     ];
+    $("#cmp-body").innerHTML = rows.map(function (r) {
+      return "<tr><td><b>" + r[0] + '</b></td><td class="r">' + r[1] + '</td><td class="r">' + r[2] + '</td><td class="r">' + r[3] + "</td></tr>";
+    }).join("");
 
-    if (metricsEl) {
-      var tableHtml = '<table class="min-w-full text-sm"><thead class="border-b border-slate-100 bg-slate-50/60 dark:border-slate-800 dark:bg-slate-800/20"><tr>' +
-        '<th class="px-5 py-3 text-left font-semibold text-slate-600 dark:text-slate-400">Metric</th>' +
-        '<th class="px-5 py-3 text-left font-semibold text-indigo-600 dark:text-indigo-400">' + escapeHtml(nameA) + '</th>' +
-        '<th class="px-5 py-3 text-left font-semibold text-amber-600 dark:text-amber-400">' + escapeHtml(nameB) + '</th>' +
-        '<th class="px-5 py-3 text-left font-semibold text-slate-500 dark:text-slate-400">Δ (B vs A)</th>' +
-        '</tr></thead><tbody class="divide-y divide-slate-100 dark:divide-slate-800">';
-      rows.forEach(function (r) {
-        tableHtml += '<tr><td class="px-5 py-3 text-slate-700 dark:text-slate-300">' + escapeHtml(r[0]) + '</td>' +
-          '<td class="px-5 py-3 font-medium text-slate-800 dark:text-slate-200">' + (r[1] || "—") + '</td>' +
-          '<td class="px-5 py-3 font-medium text-slate-800 dark:text-slate-200">' + (r[2] || "—") + '</td>' +
-          '<td class="px-5 py-3">' + deltaSpan(r[3]) + '</td></tr>';
-      });
-      tableHtml += '</tbody></table>';
-      metricsEl.innerHTML = tableHtml;
-    }
+    var hourly = function (set) {
+      var t = set.hourly_traffic || {};
+      if (Array.isArray(t.traffic)) return t.traffic.map(function (x) { return x.count; });
+      return Array.from({ length: 24 }, function (_, i) { return t[String(i)] || 0; });
+    };
+    var labels = Array.from({ length: 24 }, function (_, i) { return pad(i) + ":00"; });
+    Charts.compare("chart-compare", labels, hourly(A), hourly(B), A.name, B.name);
 
-    if (endpointsEl) {
-      var endpoints = data.dataset_a.top_endpoints || [];
-      endpointsEl.innerHTML = endpoints.length
-        ? endpoints.slice(0, 10).map(function (e) {
-            return '<div class="flex items-center justify-between gap-2 py-1 text-xs"><span class="font-mono truncate text-slate-600 dark:text-slate-400">' + escapeHtml(e.endpoint || e.path || "—") + '</span><span class="shrink-0 font-semibold text-slate-700 dark:text-slate-200">' + (e.count || 0).toLocaleString() + '</span></div>';
-          }).join("")
-        : '<p class="text-xs text-slate-400">No endpoint data.</p>';
-    }
-
-    // Traffic comparison chart
-    var hourlyA = data.dataset_a.hourly_traffic || {};
-    var hourlyB = data.dataset_b.hourly_traffic || {};
-    var hours = Array.from({length: 24}, function (_, i) { return String(i).padStart(2, "0") + ":00"; });
-    var valA  = hours.map(function (_, i) { return hourlyA[String(i)] || 0; });
-    var valB  = hours.map(function (_, i) { return hourlyB[String(i)] || 0; });
-    if (typeof LogSightCharts !== "undefined" && LogSightCharts.renderComparisonChart) {
-      LogSightCharts.renderComparisonChart("chart-compare-traffic", hours, valA, valB, nameA, nameB);
-    }
+    var top = function (set, cls) {
+      var raw = set.top_endpoints || [], items = Array.isArray(raw) ? raw : (raw.endpoints || []);
+      items = items.slice(0, 8);
+      var max = items.length ? items[0].count : 1;
+      return items.length ? items.map(function (e, i) {
+        return '<li style="--i:' + i + '"><span class="rank-label truncate">' + esc(e.endpoint) + '</span><span class="rank-value"><b>' + num(e.count) +
+          '</b></span><span class="rank-bar ' + cls + '"><i style="width:' + (e.count / max * 100) + '%"></i></span></li>';
+      }).join("") : '<li class="faint" style="display:block">No requests.</li>';
+    };
+    $("#cmp-top-a").innerHTML = top(A, "");
+    $("#cmp-top-b").innerHTML = top(B, "is-warn");
   }
 
-  // -------------------------------------------------------------------------
-  // Advanced Search
-  // -------------------------------------------------------------------------
-
-  var searchPage = 1;
-  var SEARCH_FIELDS = [
-    { value: "keyword",    label: "Keyword (raw)" },
-    { value: "ip",         label: "IP Address" },
-    { value: "method",     label: "Method" },
-    { value: "endpoint",   label: "Endpoint" },
-    { value: "status",     label: "Status Code" },
-    { value: "date_from",  label: "Date from" },
-    { value: "date_to",    label: "Date to" },
-  ];
-  var SAVED_SEARCHES_KEY = "ls-saved-searches";
-
-  async function initSearchView() {
-    await populateSelect("search-dataset");
-
-    var addBtn = $("#search-add-filter");
-    if (addBtn && !addBtn._bound) {
-      addBtn._bound = true;
-      addBtn.addEventListener("click", function () { addFilterRow(); });
-    }
-    var runBtn = $("#search-run");
-    if (runBtn && !runBtn._bound) {
-      runBtn._bound = true;
-      runBtn.addEventListener("click", function () { searchPage = 1; runAdvancedSearch(); });
-    }
-    var saveBtn = $("#search-save");
-    if (saveBtn && !saveBtn._bound) {
-      saveBtn._bound = true;
-      saveBtn.addEventListener("click", saveCurrentSearch);
-    }
-
-    if (!$("#search-filter-rows").children.length) addFilterRow();
-    renderSavedSearches();
+  function initCompare() {
+    $("#cmp-a").addEventListener("change", function () { busy(runCompare()); });
+    $("#cmp-b").addEventListener("change", function () { busy(runCompare()); });
   }
 
-  function addFilterRow(field, value) {
-    var container = $("#search-filter-rows");
-    if (!container) return;
-    var row = document.createElement("div");
-    row.className = "flex items-center gap-2";
+  // ---------------------------------------------------------------------------
+  // Reports
+  // ---------------------------------------------------------------------------
 
-    var fieldSel = document.createElement("select");
-    fieldSel.className = "rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100";
-    SEARCH_FIELDS.forEach(function (f) {
-      var opt = document.createElement("option");
-      opt.value = f.value;
-      opt.textContent = f.label;
-      if (field && f.value === field) opt.selected = true;
-      fieldSel.appendChild(opt);
-    });
-
-    var valIn = document.createElement("input");
-    valIn.type = "text";
-    valIn.placeholder = "value…";
-    valIn.value = value || "";
-    valIn.className = "flex-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100";
-    valIn.addEventListener("keydown", function (e) { if (e.key === "Enter") { searchPage = 1; runAdvancedSearch(); } });
-
-    var rmBtn = document.createElement("button");
-    rmBtn.type = "button";
-    rmBtn.textContent = "✕";
-    rmBtn.className = "rounded-lg px-2 py-1 text-xs text-slate-400 hover:text-slate-600";
-    rmBtn.addEventListener("click", function () { container.removeChild(row); });
-
-    row.appendChild(fieldSel);
-    row.appendChild(valIn);
-    row.appendChild(rmBtn);
-    container.appendChild(row);
-  }
-
-  function getSearchFilters() {
-    var rows = $all("#search-filter-rows > div");
-    var params = {};
-    rows.forEach(function (row) {
-      var sel = row.querySelector("select");
-      var inp = row.querySelector("input");
-      if (sel && inp && inp.value.trim()) {
-        params[sel.value] = inp.value.trim();
-      }
-    });
-    return params;
-  }
-
-  async function runAdvancedSearch() {
-    var dsSel = $("#search-dataset");
-    if (!dsSel || !dsSel.value) { window.alert("Please select a dataset first."); return; }
-    var filters = getSearchFilters();
-    var runBtn = $("#search-run");
-    if (runBtn) { runBtn.disabled = true; runBtn.textContent = "Searching…"; }
-    var meta = $("#search-meta");
-    if (meta) meta.textContent = "Loading…";
-
-    try {
-      var params = {
-        page: searchPage,
-        pageSize: 25,
-        search:    filters.keyword  || "",
-        ip:        filters.ip       || "",
-        method:    filters.method   || "",
-        endpoint:  filters.endpoint || "",
-        status:    filters.status   || "all",
-        dateFrom:  filters.date_from || "",
-        dateTo:    filters.date_to   || "",
-      };
-      var result = await LogSightAPI.getLogLines(dsSel.value, params);
-      renderSearchResults(result);
-    } catch (err) {
-      if (meta) meta.textContent = "Error: " + (err.message || "search failed");
-    } finally {
-      if (runBtn) { runBtn.disabled = false; runBtn.innerHTML = '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg> Search'; }
-    }
-  }
-
-  function renderSearchResults(result) {
-    var wrap    = $("#search-results-wrap");
-    var tbody   = $("#search-results-body");
-    var countEl = $("#search-result-count");
-    var pageEl  = $("#search-page-info");
-    var prevBtn = $("#search-prev");
-    var nextBtn = $("#search-next");
-    var meta    = $("#search-meta");
-
-    if (!wrap || !tbody) return;
-    wrap.classList.remove("hidden");
-
-    var total = result.total || 0;
-    var from  = total ? (result.page - 1) * result.pageSize + 1 : 0;
-    var to    = (result.page - 1) * result.pageSize + (result.items || []).length;
-    if (countEl) countEl.textContent = total.toLocaleString() + " results";
-    if (meta)    meta.textContent    = "";
-    if (pageEl)  pageEl.textContent  = total ? from + "–" + to + " of " + total.toLocaleString() : "No results";
-    if (prevBtn) { prevBtn.disabled = result.page <= 1; prevBtn.onclick = function () { if (searchPage > 1) { searchPage--; runAdvancedSearch(); } }; }
-    if (nextBtn) { nextBtn.disabled = result.page >= result.totalPages; nextBtn.onclick = function () { if (searchPage < result.totalPages) { searchPage++; runAdvancedSearch(); } }; }
-
-    tbody.innerHTML = "";
-    (result.items || []).forEach(function (line, idx) {
-      var tr = document.createElement("tr");
-      tr.className = "table-row-animate border-b border-slate-100 font-mono text-xs dark:border-slate-800";
-      tr.style.animationDelay = idx * 20 + "ms";
-      var code = Number(line.status || 0);
-      var badgeCls = code >= 500 ? "border-red-200 bg-red-50 text-red-700" : code >= 400 ? "border-amber-200 bg-amber-50 text-amber-700" : code >= 200 ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-slate-50 text-slate-700";
-      tr.innerHTML =
-        '<td class="whitespace-nowrap px-4 py-2.5 text-slate-500">' + escapeHtml(formatDate(line.timestamp)) + "</td>" +
-        '<td class="px-4 py-2.5"><span class="inline-flex rounded px-1.5 py-0.5 text-[10px] font-semibold border ' + badgeCls + '">' + escapeHtml(line.status || "—") + "</span></td>" +
-        '<td class="px-4 py-2.5 text-slate-600">' + escapeHtml(line.method || "—") + "</td>" +
-        '<td class="px-4 py-2.5 text-slate-600">' + escapeHtml(line.ip_address || "—") + "</td>" +
-        '<td class="max-w-xs truncate px-4 py-2.5 text-slate-800 dark:text-slate-200">' + escapeHtml(line.endpoint || line.raw || "—") + "</td>";
-      tbody.appendChild(tr);
+  function loadReports() { return contextLine("rp-context"); }
+  function initReports() {
+    $("#rp-download").addEventListener("click", function () {
+      var format = ($('input[name="rp-format"]:checked') || {}).value || "csv";
+      try {
+        API.downloadReport(state.active.id, format);
+        toast("Your " + format.toUpperCase() + " report for “" + state.active.name + "” is downloading.", "good");
+      } catch (err) { toast(err.message || "The report could not be downloaded.", "bad"); }
     });
   }
 
-  function saveCurrentSearch() {
-    var filters = getSearchFilters();
-    var dsSel   = $("#search-dataset");
-    if (!Object.keys(filters).length) { window.alert("Add at least one filter before saving."); return; }
-    var name = window.prompt("Name this search:");
-    if (!name) return;
-    var saved = JSON.parse(localStorage.getItem(SAVED_SEARCHES_KEY) || "[]");
-    saved.unshift({ name: name, filters: filters, datasetId: dsSel ? dsSel.value : "" });
-    if (saved.length > 10) saved = saved.slice(0, 10);
-    localStorage.setItem(SAVED_SEARCHES_KEY, JSON.stringify(saved));
-    renderSavedSearches();
-  }
-
-  function renderSavedSearches() {
-    var wrap = $("#search-saved-wrap");
-    var list = $("#search-saved-list");
-    if (!wrap || !list) return;
-    var saved = JSON.parse(localStorage.getItem(SAVED_SEARCHES_KEY) || "[]");
-    if (!saved.length) { wrap.classList.add("hidden"); return; }
-    wrap.classList.remove("hidden");
-    list.innerHTML = "";
-    saved.forEach(function (s, idx) {
-      var row = document.createElement("div");
-      row.className = "flex items-center justify-between gap-3 px-5 py-3";
-      var summary = Object.entries(s.filters).map(function (kv) { return kv[0] + ": " + kv[1]; }).join(" · ");
-      row.innerHTML =
-        '<div class="min-w-0 flex-1 cursor-pointer" data-load-search="' + idx + '">' +
-          '<p class="text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400">' + escapeHtml(s.name) + '</p>' +
-          '<p class="text-xs text-slate-400 truncate">' + escapeHtml(summary) + '</p>' +
-        '</div>' +
-        '<button type="button" data-del-search="' + idx + '" class="shrink-0 text-xs text-slate-400 hover:text-red-500">Remove</button>';
-      row.querySelector("[data-load-search]").addEventListener("click", function () {
-        var container = $("#search-filter-rows");
-        if (container) container.innerHTML = "";
-        Object.entries(s.filters).forEach(function (kv) { addFilterRow(kv[0], kv[1]); });
-        var dsSel = $("#search-dataset");
-        if (dsSel && s.datasetId) dsSel.value = s.datasetId;
-        searchPage = 1;
-        runAdvancedSearch();
-      });
-      row.querySelector("[data-del-search]").addEventListener("click", function () {
-        var items = JSON.parse(localStorage.getItem(SAVED_SEARCHES_KEY) || "[]");
-        items.splice(idx, 1);
-        localStorage.setItem(SAVED_SEARCHES_KEY, JSON.stringify(items));
-        renderSavedSearches();
-      });
-      list.appendChild(row);
-    });
-  }
-
-  // -------------------------------------------------------------------------
-  // Live Ingestion Simulator
-  // -------------------------------------------------------------------------
-
-  var simulateAutoTimer = null;
-  var simulateTotalGenerated = 0;
-
-  async function initSimulateView() {
-    await populateSelect("simulate-dataset");
-    var onceBtn    = $("#simulate-once");
-    var autoBtn    = $("#simulate-auto");
-    var errBtn     = $("#simulate-error-spike");
-    var trafficBtn = $("#simulate-traffic-spike");
-    var dlBtn      = $("#simulate-download");
-
-    if (onceBtn && !onceBtn._bound) {
-      onceBtn._bound = true;
-      onceBtn.addEventListener("click", function () { runSimulateBatch(false); });
-    }
-    if (autoBtn && !autoBtn._bound) {
-      autoBtn._bound = true;
-      autoBtn.addEventListener("click", toggleSimulateAuto);
-    }
-    if (errBtn && !errBtn._bound) {
-      errBtn._bound = true;
-      errBtn.addEventListener("click", runErrorSpike);
-    }
-    if (trafficBtn && !trafficBtn._bound) {
-      trafficBtn._bound = true;
-      trafficBtn.addEventListener("click", runTrafficSpike);
-    }
-    if (dlBtn && !dlBtn._bound) {
-      dlBtn._bound = true;
-      dlBtn.addEventListener("click", function () {
-        var dsSel = $("#simulate-dataset");
-        if (!dsSel || !dsSel.value) { window.alert("Select a dataset first."); return; }
-        LogSightAPI.simulateDownload(dsSel.value);
-      });
-    }
-  }
-
-  async function runErrorSpike() {
-    var dsSel = $("#simulate-dataset");
-    if (!dsSel || !dsSel.value) { window.alert("Please select a target dataset first."); return; }
-    var btn = $("#simulate-error-spike");
-    if (btn) { btn.disabled = true; btn.textContent = "Injecting…"; }
-    try {
-      var data = await LogSightAPI.simulateErrorSpike(dsSel.value);
-      _applySimulateResult(data);
-      if (data.alert_status && data.alert_status !== "ok") {
-        _showSimulateAlertBadge(data.alert_status, data.alert_results || []);
-      }
-    } catch (err) {
-      window.alert(err.message || "Error spike failed.");
-    } finally {
-      if (btn) {
-        btn.disabled = false;
-        btn.innerHTML = '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg> Spike Errors';
-      }
-    }
-  }
-
-  async function runTrafficSpike() {
-    var dsSel = $("#simulate-dataset");
-    if (!dsSel || !dsSel.value) { window.alert("Please select a target dataset first."); return; }
-    var btn = $("#simulate-traffic-spike");
-    if (btn) { btn.disabled = true; btn.textContent = "Injecting…"; }
-    try {
-      var data = await LogSightAPI.simulateTrafficSpike(dsSel.value);
-      _applySimulateResult(data);
-      if (data.alert_status && data.alert_status !== "ok") {
-        _showSimulateAlertBadge(data.alert_status, data.alert_results || []);
-      }
-    } catch (err) {
-      window.alert(err.message || "Traffic spike failed.");
-    } finally {
-      if (btn) {
-        btn.disabled = false;
-        btn.innerHTML = '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg> Spike Traffic';
-      }
-    }
-  }
-
-  function _showSimulateAlertBadge(status, results) {
-    var statsEl  = $("#simulate-stats");
-    var statusEl = $("#simulate-status");
-    if (statusEl) {
-      var label = status === "critical" ? "⚠ CRITICAL ALERT" : "⚡ WARNING";
-      var cls   = status === "critical" ? "text-red-600 dark:text-red-400" : "text-amber-600 dark:text-amber-400";
-      statusEl.textContent  = label;
-      statusEl.className    = "mt-1 text-sm font-bold " + cls;
-    }
-    if (statsEl) { statsEl.classList.remove("hidden"); statsEl.classList.add("grid"); }
-    // Refresh notification badge count
-    pollNotifCount();
-  }
-
-  function _applySimulateResult(data) {
-    simulateTotalGenerated += data.generated || 0;
-    var totalEl  = $("#simulate-total");
-    var lastEl   = $("#simulate-last");
-    var statusEl = $("#simulate-status");
-    var statsEl  = $("#simulate-stats");
-    var feed     = $("#simulate-feed");
-
-    if (statsEl) { statsEl.classList.remove("hidden"); statsEl.classList.add("grid"); }
-    if (totalEl) totalEl.textContent = simulateTotalGenerated.toLocaleString();
-    if (lastEl)  lastEl.textContent  = (data.generated || 0) + " entries";
-    if (statusEl && !statusEl.className.includes("text-red") && !statusEl.className.includes("text-amber")) {
-      statusEl.textContent = simulateAutoTimer ? "● Streaming" : "Done";
-      statusEl.className   = "mt-1 text-sm font-semibold text-slate-900 dark:text-white";
-    }
-
-    if (feed && data.entries) {
-      if (feed.querySelector("p")) feed.innerHTML = "";
-      data.entries.slice(0, 10).forEach(function (e) {
-        var line = document.createElement("div");
-        var code = Number(e.status_code || 0);
-        var cls  = code >= 500 ? "text-red-500" : code >= 400 ? "text-amber-500" : "text-emerald-500";
-        line.className = "py-0.5 border-b border-slate-100/40 dark:border-slate-800/40";
-        line.innerHTML =
-          '<span class="text-slate-400">' + new Date(e.timestamp).toLocaleTimeString() + '</span> ' +
-          '<span class="' + cls + '">' + escapeHtml(String(e.status_code)) + '</span> ' +
-          escapeHtml(e.method) + ' ' + escapeHtml(e.endpoint) + ' — ' + escapeHtml(e.ip_address);
-        feed.insertBefore(line, feed.firstChild);
-        while (feed.children.length > 100) feed.removeChild(feed.lastChild);
-      });
-    }
-
-    // Refresh notification bell after every batch (alerts may have fired).
-    pollNotifCount();
-  }
-
-  async function runSimulateBatch(silent) {
-    var dsSel   = $("#simulate-dataset");
-    var countIn = $("#simulate-count");
-    if (!dsSel || !dsSel.value) { if (!silent) window.alert("Please select a target dataset first."); return; }
-    var count = Math.min(50, parseInt((countIn && countIn.value) || "10", 10) || 10);
-    try {
-      var data = await LogSightAPI.simulateLogs(dsSel.value, count);
-      _applySimulateResult(data);
-      if (data.alert_status && data.alert_status !== "ok") {
-        _showSimulateAlertBadge(data.alert_status, []);
-      }
-    } catch (err) {
-      if (!silent) window.alert(err.message || "Simulation failed.");
-    }
-  }
-
-  function toggleSimulateAuto() {
-    var autoBtn  = $("#simulate-auto");
-    var statusEl = $("#simulate-status");
-    if (simulateAutoTimer) {
-      clearInterval(simulateAutoTimer);
-      simulateAutoTimer = null;
-      if (autoBtn)  autoBtn.innerHTML = '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> Auto (every 3s)';
-      if (statusEl) statusEl.textContent = "Stopped";
-    } else {
-      runSimulateBatch(false);
-      simulateAutoTimer = setInterval(function () { runSimulateBatch(true); }, 3000);
-      if (autoBtn)  autoBtn.innerHTML = '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> Stop';
-      if (statusEl) statusEl.textContent = "● Streaming";
-    }
-  }
-
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
   // Notifications
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
 
-  var notifPollTimer = null;
-
-  function initNotifications() {
-    var bell     = $("#notif-bell");
-    var dropdown = $("#notif-dropdown");
-    var markAll  = $("#notif-mark-all");
-
-    if (bell && !bell._bound) {
-      bell._bound = true;
-      bell.addEventListener("click", function (e) {
-        e.stopPropagation();
-        dropdown && dropdown.classList.toggle("hidden");
-        if (dropdown && !dropdown.classList.contains("hidden")) loadNotifications();
-      });
-    }
-    if (markAll && !markAll._bound) {
-      markAll._bound = true;
-      markAll.addEventListener("click", async function () {
-        try { await LogSightAPI.markAllNotifsRead(); } catch (_) {}
-        loadNotifications();
-      });
-    }
-    var deleteAll = $("#notif-delete-all");
-    if (deleteAll && !deleteAll._bound) {
-      deleteAll._bound = true;
-      deleteAll.addEventListener("click", async function () {
-        try { await LogSightAPI.deleteAllNotifs(); } catch (_) {}
-        loadNotifications();
-        pollNotifCount();
-      });
-    }
-    document.addEventListener("click", function (e) {
-      if (dropdown && !dropdown.classList.contains("hidden") && !bell.contains(e.target) && !dropdown.contains(e.target)) {
-        dropdown.classList.add("hidden");
-      }
-    });
-
-    pollNotifCount();
-    notifPollTimer = setInterval(pollNotifCount, 30000);
-  }
-
-  async function pollNotifCount() {
+  async function pollNotifications() {
     try {
-      var data  = await LogSightAPI.getNotifCount();
-      var badge = $("#notif-badge");
-      if (!badge) return;
-      var count = data.unread_count || 0;
-      badge.textContent = count > 99 ? "99+" : String(count);
-      badge.classList.toggle("hidden", count === 0);
+      var data = await API.getNotifCount(), n = data.unread_count || 0, badge = $("#notif-badge");
+      badge.hidden = n === 0;
+      badge.textContent = n > 99 ? "99+" : n;
+      $("#notif-btn").setAttribute("aria-label", n ? "Notifications, " + n + " unread" : "Notifications");
     } catch (_) {}
   }
 
   async function loadNotifications() {
     var list = $("#notif-list");
-    if (!list) return;
+    list.innerHTML = '<div style="padding:var(--space-sm)">' + skeleton(3) + "</div>";
     try {
-      var data  = await LogSightAPI.getNotifications();
-      var notifs = data.notifications || [];
-      if (!notifs.length) {
-        list.innerHTML = '<p class="px-4 py-6 text-center text-xs text-slate-400">No notifications yet.</p>';
-        return;
-      }
-      list.innerHTML = "";
-      notifs.forEach(function (n) {
-        var item = document.createElement("div");
-        item.className = "notif-item" + (n.is_read ? "" : " unread");
-        var dotColor = n.severity === "critical" ? "bg-red-500" : n.severity === "warning" ? "bg-amber-400" : "bg-indigo-400";
-        item.innerHTML =
-          '<span class="notif-dot ' + dotColor + '"></span>' +
-          '<div class="min-w-0 flex-1">' +
-            '<p class="text-xs leading-snug text-slate-700 dark:text-slate-300">' + escapeHtml(n.message) + '</p>' +
-            '<p class="mt-0.5 text-[10px] text-slate-400">' + escapeHtml(formatDate(n.created_at)) + '</p>' +
-          '</div>' +
-          '<button type="button" class="notif-delete-btn ml-2 flex-shrink-0 rounded p-1 text-slate-400 hover:text-red-500 dark:hover:text-red-400" title="Delete">' +
-            '<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' +
-          '</button>';
-        if (!n.is_read) {
-          item.addEventListener("click", async function (e) {
-            if (e.target.closest(".notif-delete-btn")) return;
-            try { await LogSightAPI.markNotifRead(n.id); } catch (_) {}
-            item.classList.remove("unread");
-            pollNotifCount();
-          });
-        }
-        var deleteBtn = item.querySelector(".notif-delete-btn");
-        if (deleteBtn) {
-          deleteBtn.addEventListener("click", async function (e) {
-            e.stopPropagation();
-            try { await LogSightAPI.deleteNotif(n.id); } catch (_) {}
-            item.remove();
-            pollNotifCount();
-          });
-        }
-        list.appendChild(item);
-      });
+      var items = (await API.getNotifications()).notifications || [];
+      list.innerHTML = items.length ? items.map(function (n) {
+        return '<div class="notif' + (n.is_read ? "" : " is-unread") + '" data-id="' + n.id + '"><span class="notif-mark" aria-hidden="true"></span>' +
+          '<span><span class="notif-text">' + esc(n.message) + '</span><br /><span class="notif-time">' + (n.is_read ? "" : "Unread · ") + esc(ago(n.created_at)) + "</span></span>" +
+          '<button type="button" class="icon-btn" style="width:28px;height:28px" data-delete-notif aria-label="Delete notification">' + icon("x", "icon-sm") + "</button></div>";
+      }).join("") : '<p class="faint" style="padding:var(--space-lg) var(--space-md);font-size:var(--text-sm)">Nothing yet. You will be told here when a log finishes processing.</p>';
     } catch (_) {
-      list.innerHTML = '<p class="px-4 py-4 text-xs text-red-500">Failed to load notifications.</p>';
+      list.innerHTML = '<p class="field-error" style="padding:var(--space-md)">Notifications could not be loaded.</p>';
     }
   }
 
-  // -------------------------------------------------------------------------
-  // Boot
-  // -------------------------------------------------------------------------
-
-  // -------------------------------------------------------------------------
-  // User Management (RBAC)
-  // -------------------------------------------------------------------------
-
-  var _currentUserRole = (typeof window !== "undefined" && window.LOGSIGHT_USER_ROLE) || "pending";
-
-  function initAdminNav() {
-    if (_currentUserRole === "admin") {
-      var adminGroup  = $("#nav-admin-group");
-      var mobileLabel = $("#mobile-admin-label");
-      var mobileLink  = $("#mobile-admin-users");
-      if (adminGroup)  adminGroup.classList.remove("hidden");
-      if (mobileLabel) mobileLabel.classList.remove("hidden");
-      if (mobileLink)  mobileLink.classList.remove("hidden");
-    }
+  function initNotifications() {
+    bindPopover($("#notif-btn"), $("#notif-popover"), loadNotifications);
+    $("#notif-list").addEventListener("click", async function (e) {
+      var row = e.target.closest(".notif");
+      if (!row) return;
+      if (e.target.closest("[data-delete-notif]")) { await API.deleteNotif(row.dataset.id); row.remove(); }
+      else if (row.classList.contains("is-unread")) { await API.markNotifRead(row.dataset.id); row.classList.remove("is-unread"); }
+      pollNotifications();
+    });
+    $("#notif-read-all").addEventListener("click", async function () { await API.markAllNotifsRead(); loadNotifications(); pollNotifications(); });
+    $("#notif-clear").addEventListener("click", async function () { await API.deleteAllNotifs(); loadNotifications(); pollNotifications(); });
+    pollNotifications();
+    setInterval(pollNotifications, 30000);
   }
 
-  async function initUsersView() {
-    var noAccess   = $("#users-no-access");
-    var inviteWrap = $("#users-invite-wrap");
+  // ---------------------------------------------------------------------------
+  // Shell wiring and boot
+  // ---------------------------------------------------------------------------
 
-    if (_currentUserRole !== "admin") {
-      if (inviteWrap) inviteWrap.classList.add("hidden");
-      if (noAccess)   noAccess.classList.remove("hidden");
-      return;
-    }
+  var LOADERS = {
+    overview: loadOverview,
+    datasets: function () { return loadDatasets(true); },   // always fresh: statuses change
+    explore: loadExplore,
+    forecast: loadForecast,
+    anomalies: loadAnomalies,
+    security: loadSecurity,
+    compare: loadCompare,
+    reports: loadReports,
+  };
 
-    var refreshBtn = $("#users-refresh");
-    if (refreshBtn && !refreshBtn._bound) {
-      refreshBtn._bound = true;
-      refreshBtn.addEventListener("click", function () { loadUsersTable(); loadInvitesList(); });
-    }
+  function initShell() {
+    bindPopover($("#ds-button"), $("#ds-popover"));
+    $("#ds-list").addEventListener("click", function (e) {
+      var option = e.target.closest("[data-id]");
+      if (!option) return;
+      var d = state.datasets.filter(function (x) { return x.id === option.dataset.id; })[0];
+      closePopover();
+      if (d && (!state.active || d.id !== state.active.id)) setActive(d);
+    });
+    $("#ds-popover").addEventListener("click", function (e) { if (e.target.closest("a")) closePopover(); });
 
-    var emailBtn = $("#invite-send-email");
-    if (emailBtn && !emailBtn._bound) {
-      emailBtn._bound = true;
-      emailBtn.addEventListener("click", function () { sendInvite(true); });
-    }
-    var tokenBtn = $("#invite-generate-token");
-    if (tokenBtn && !tokenBtn._bound) {
-      tokenBtn._bound = true;
-      tokenBtn.addEventListener("click", function () { sendInvite(false); });
-    }
-    // Bind role-token selector (independent of email form)
+    $("#menu-btn").addEventListener("click", function () {
+      var open = $("#shell").classList.toggle("nav-open");
+      this.setAttribute("aria-expanded", String(open));
+    });
+    $("#scrim").addEventListener("click", function () { $("#shell").classList.remove("nav-open"); });
 
-
-    loadUsersTable();
-    loadInvitesList();
-  }
-
-  function _buildInviteUrl(token) {
-    return window.location.origin + "/accounts/register/?invite=" + encodeURIComponent(token);
-  }
-
-  function _shortToken(token) {
-    // Show the full UUID token — it's what the invitee types on the login page.
-    return token;
-  }
-
-  function _copyToClipboard(text, btn) {
-    navigator.clipboard.writeText(text).then(function () {
-      var original = btn.textContent;
-      btn.textContent = "Copied!";
-      btn.classList.add("text-emerald-600");
-      setTimeout(function () { btn.textContent = original; btn.classList.remove("text-emerald-600"); }, 2000);
-    }).catch(function () {
-      // Fallback for environments where clipboard API is restricted.
-      var ta = document.createElement("textarea");
-      ta.value = text;
-      ta.style.cssText = "position:fixed;opacity:0;";
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand("copy");
-      document.body.removeChild(ta);
-      btn.textContent = "Copied!";
-      setTimeout(function () { btn.textContent = "Copy link"; }, 2000);
+    // Global search goes straight to the matching requests.
+    $("#global-search-form").addEventListener("submit", function (e) {
+      e.preventDefault();
+      var input = $("#global-search"), q = input.value.trim();
+      if (!q) return;
+      if (!state.active) { toast("Open a dataset first, then search its requests.", "bad"); return; }
+      input.value = ""; input.blur();
+      openExplore({ q: q });
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) return;
+      e.preventDefault();
+      $("#global-search").focus();
     });
   }
 
-  async function sendInvite(sendEmail) {
-    var emailIn  = $("#invite-email");
-    var roleIn   = sendEmail ? $("#invite-role-email") : $("#invite-role-token");
-    var msgArea  = $("#invite-msg");
-    var err      = $("#invite-err");
-    var emailBtn = $("#invite-send-email");
-    var tokenBtn = $("#invite-generate-token");
-    var activeBtn = sendEmail ? emailBtn : tokenBtn;
-
-    if (sendEmail && (!emailIn || !emailIn.value.trim())) {
-      window.alert("Enter an email address first."); return;
-    }
-
-    if (msgArea) msgArea.innerHTML = "";
-    if (err)     err.classList.add("hidden");
-    if (activeBtn) { activeBtn.disabled = true; activeBtn.textContent = "Working…"; }
-
-    try {
-      var emailVal = (sendEmail && emailIn) ? emailIn.value.trim() : "";
-      var data   = await LogSightAPI.createInvite(emailVal, roleIn ? roleIn.value : "analyst", sendEmail);
-      var invite = data.invite;
-      var token  = invite.token;
-
-      if (msgArea) {
-        if (sendEmail) {
-          // Email sent — just confirm, no need to show the token.
-          msgArea.innerHTML =
-            '<div class="mt-3 rounded-xl border border-emerald-200 bg-emerald-50/80 p-3 dark:border-emerald-800/40 dark:bg-emerald-950/20">' +
-              '<p class="text-xs font-semibold text-emerald-700 dark:text-emerald-300">Email sent to ' + escapeHtml(invite.email) + '</p>' +
-              '<p class="mt-0.5 text-xs text-emerald-600 dark:text-emerald-400">They\'ll receive a registration link. The invite expires in 7 days.</p>' +
-            '</div>';
-        } else {
-          // No email — show the copyable token.
-          msgArea.innerHTML =
-            '<div class="mt-3 rounded-xl border border-indigo-200 bg-indigo-50/80 p-3 dark:border-indigo-800/40 dark:bg-indigo-950/20">' +
-              '<p class="mb-1 text-xs font-semibold text-indigo-700 dark:text-indigo-300">Token generated for ' + escapeHtml(invite.email) + ' (' + escapeHtml(invite.role) + ')</p>' +
-              '<p class="mb-2 text-xs text-indigo-600 dark:text-indigo-400">Share this code manually. They enter it on the login page under "Have an invite code?"</p>' +
-              '<div class="flex items-center gap-2">' +
-                '<input type="text" readonly value="' + escapeHtml(token) + '" ' +
-                  'class="flex-1 min-w-0 rounded-lg border border-indigo-200 bg-white px-2.5 py-1.5 font-mono text-xs text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-400/30 dark:border-indigo-800/40 dark:bg-slate-900 dark:text-slate-300" />' +
-                '<button type="button" id="invite-copy-btn" class="shrink-0 rounded-lg border border-indigo-300 bg-white px-3 py-1.5 text-xs font-medium text-indigo-700 transition hover:bg-indigo-50 dark:border-indigo-700 dark:bg-slate-800 dark:text-indigo-300">Copy code</button>' +
-              '</div>' +
-              '<p class="mt-1.5 text-[10px] text-indigo-400 dark:text-indigo-500">Expires in 7 days · single use</p>' +
-            '</div>';
-
-          var copyBtn = msgArea.querySelector("#invite-copy-btn");
-          if (copyBtn) copyBtn.addEventListener("click", function () { _copyToClipboard(token, copyBtn); });
-          var tokenInput = msgArea.querySelector("input");
-          if (tokenInput) tokenInput.addEventListener("click", function () { tokenInput.select(); });
-        }
-      }
-
-      if (sendEmail && emailIn) emailIn.value = "";
-      loadInvitesList();
-
-    } catch (e) {
-      if (err) { err.textContent = e.message || "Failed to create invite."; err.classList.remove("hidden"); }
-    } finally {
-      if (emailBtn) {
-        emailBtn.disabled = false;
-        emailBtn.innerHTML = '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg> Send Email';
-      }
-      if (tokenBtn) {
-        tokenBtn.disabled = false;
-        tokenBtn.innerHTML = '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" /></svg> Generate Token';
-      }
-    }
-  }
-
-  async function loadInvitesList() {
-    var wrap = $("#invites-wrap");
-    var list = $("#invites-list");
-    if (!wrap || !list) return;
-
-    try {
-      var data    = await LogSightAPI.listInvites();
-      var pending = (data.invites || []).filter(function (i) { return i.is_valid; });
-
-      if (!pending.length) { wrap.classList.add("hidden"); return; }
-
-      wrap.classList.remove("hidden");
-      list.innerHTML = "";
-
-      pending.forEach(function (inv) {
-        var token = inv.token;
-        var row   = document.createElement("div");
-        row.className = "space-y-2 px-5 py-4 border-b border-slate-100 last:border-0 dark:border-slate-800";
-
-        var roleCls = inv.role === "analyst"
-          ? "bg-cyan-100 text-cyan-700 border-cyan-200 dark:bg-cyan-950/40 dark:text-cyan-300 dark:border-cyan-800/40"
-          : "bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800/40 dark:text-slate-300 dark:border-slate-700";
-
-        var expiresDate = inv.expires_at ? inv.expires_at.slice(0, 10) : "—";
-
-        row.innerHTML =
-          '<div class="flex items-center justify-between gap-3">' +
-            '<div class="min-w-0 flex-1">' +
-              '<p class="text-sm font-medium text-slate-800 dark:text-slate-200">' + escapeHtml(inv.email) + '</p>' +
-              '<p class="mt-0.5 text-xs text-slate-400">Role: ' + escapeHtml(inv.role) + ' · expires ' + escapeHtml(expiresDate) + '</p>' +
-            '</div>' +
-            '<span class="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ' + roleCls + '">' + escapeHtml(inv.role) + '</span>' +
-            '<button type="button" data-revoke-id="' + inv.id + '" class="rounded-lg border border-red-200 px-2.5 py-1 text-xs font-medium text-red-600 transition hover:bg-red-50 dark:border-red-900/50 dark:text-red-400">Revoke</button>' +
-          '</div>' +
-          '<div class="flex items-center gap-2">' +
-            '<input type="text" readonly value="' + escapeHtml(token) + '" ' +
-              'title="Share this code — invitee enters it on the login page" ' +
-              'class="flex-1 min-w-0 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 font-mono text-xs text-slate-600 focus:outline-none dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-400" />' +
-            '<button type="button" class="invite-copy-code shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">Copy code</button>' +
-          '</div>';
-
-        row.querySelector("[data-revoke-id]").addEventListener("click", async function () {
-          if (!confirm("Revoke this invite? The code will stop working immediately.")) return;
-          try {
-            await LogSightAPI.revokeInvite(inv.id);
-            row.remove();
-            if (!list.children.length) wrap.classList.add("hidden");
-          } catch (e) {
-            window.alert(e.message || "Failed to revoke.");
-          }
-        });
-
-        var copyBtn = row.querySelector(".invite-copy-code");
-        if (copyBtn) {
-          copyBtn.addEventListener("click", function () { _copyToClipboard(token, copyBtn); });
-        }
-        var tokenInput = row.querySelector("input[readonly]");
-        if (tokenInput) tokenInput.addEventListener("click", function () { tokenInput.select(); });
-
-        list.appendChild(row);
-      });
-    } catch (_) {}
-  }
-
-  async function loadUsersTable() {
-    var tbody = $("#users-body");
-    if (!tbody) return;
-    tbody.innerHTML = '<tr><td colspan="5" class="px-5 py-6 text-center text-sm text-slate-400">Loading…</td></tr>';
-
-    try {
-      var data  = await LogSightAPI.getUsers();
-      var users = data.users || [];
-
-      if (!users.length) {
-        tbody.innerHTML = '<tr><td colspan="5" class="px-5 py-8 text-center text-sm text-slate-400">No users found.</td></tr>';
-        return;
-      }
-
-      tbody.innerHTML = "";
-      users.forEach(function (u) {
-        var isSelf = (u.username === (window.__logsight_username || ""));
-        var tr = document.createElement("tr");
-        tr.className = "border-b border-slate-100 transition-colors hover:bg-slate-50/60 dark:border-slate-800 dark:hover:bg-slate-800/30";
-
-        var roleBadgeClass = {
-          admin:   "bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-950/40 dark:text-indigo-300 dark:border-indigo-800/40",
-          analyst: "bg-cyan-100 text-cyan-700 border-cyan-200 dark:bg-cyan-950/40 dark:text-cyan-300 dark:border-cyan-800/40",
-          viewer:  "bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800/40 dark:text-slate-300 dark:border-slate-700",
-          pending: "bg-amber-100 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/40",
-        }[u.role] || "bg-slate-100 text-slate-600 border-slate-200";
-
-        var initial = (u.username || "?").slice(0, 1).toUpperCase();
-
-        var roleSelect = isSelf
-          ? '<span class="text-xs text-slate-400 italic">You</span>'
-          : '<select data-uid="' + u.user_id + '" class="user-role-select rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 shadow-sm focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">' +
-            ["admin", "analyst", "viewer", "pending"].map(function (r) {
-              return '<option value="' + r + '"' + (r === u.role ? " selected" : "") + '>' + r.charAt(0).toUpperCase() + r.slice(1) + '</option>';
-            }).join("") +
-            '</select>';
-
-        tr.innerHTML =
-          '<td class="px-5 py-3">' +
-            '<div class="flex items-center gap-3">' +
-              '<span style="width:32px;height:32px;border-radius:50%;background:rgba(15,127,156,0.1);border:1px solid rgba(15,127,156,0.2);display:inline-flex;align-items:center;justify-content:center;font-size:0.8rem;font-weight:700;color:var(--ls-accent);flex-shrink:0;">' + escapeHtml(initial) + '</span>' +
-              '<span class="font-medium text-slate-800 dark:text-slate-200">' + escapeHtml(u.username) + '</span>' +
-            '</div>' +
-          '</td>' +
-          '<td class="px-5 py-3 text-sm text-slate-500 dark:text-slate-400">' + escapeHtml(u.email || "—") + '</td>' +
-          '<td class="whitespace-nowrap px-5 py-3 text-xs text-slate-500 dark:text-slate-400">' + escapeHtml(formatDate(u.date_joined)) + '</td>' +
-          '<td class="px-5 py-3"><span class="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ' + roleBadgeClass + '">' + escapeHtml(u.role || "—") + '</span></td>' +
-          '<td class="px-5 py-3">' + roleSelect + '</td>';
-
-        tbody.appendChild(tr);
-      });
-
-      // Wire role select dropdowns.
-      tbody.querySelectorAll(".user-role-select").forEach(function (sel) {
-        sel.addEventListener("change", async function () {
-          var uid  = sel.getAttribute("data-uid");
-          var role = sel.value;
-          sel.disabled = true;
-          try {
-            await LogSightAPI.assignRole(uid, role);
-            // Update the badge in the same row without reloading.
-            var badge = sel.closest("tr").querySelector("td:nth-child(4) span");
-            var cls = {
-              admin:   "bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-950/40 dark:text-indigo-300 dark:border-indigo-800/40",
-              analyst: "bg-cyan-100 text-cyan-700 border-cyan-200 dark:bg-cyan-950/40 dark:text-cyan-300 dark:border-cyan-800/40",
-              viewer:  "bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800/40 dark:text-slate-300 dark:border-slate-700",
-              pending: "bg-amber-100 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/40",
-            }[role] || "";
-            if (badge) { badge.className = "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium " + cls; badge.textContent = role; }
-          } catch (err) {
-            window.alert(err.message || "Failed to assign role.");
-          } finally {
-            sel.disabled = false;
-          }
-        });
-      });
-
-    } catch (err) {
-      tbody.innerHTML = '<tr><td colspan="5" class="px-5 py-4 text-sm text-red-500">' + escapeHtml(err.message || "Failed to load users.") + '</td></tr>';
-    }
-  }
-
-  document.addEventListener("DOMContentLoaded", function () {
-    initTheme();
-    initTopNavigation();
-    initAdminNav();
-    initUpload();
-    bindNav();
-    initDashboardControls();
-    initDashboardDateFilter();
+  async function boot() {
+    state.hidden = load(STORE.hidden, []);
+    initShell();
+    initOverview();
+    initDatasets();
+    initExplore();
+    initForecast();
+    initAnomalies();
+    initCompare();
+    initReports();
     initNotifications();
 
-    // Load backend preferences and apply widget visibility.
-    LogSightAPI.getPreferences().then(function (prefs) {
-      if (prefs && prefs.hidden_widgets && prefs.hidden_widgets.length) {
-        savePrefsToStorage(prefs);
-        applyWidgetVisibility(prefs.hidden_widgets);
+    (window.LOGSIGHT_MESSAGES || []).forEach(function (m) { toast(m.text, /error/.test(m.level) ? "bad" : "good"); });
+
+    API.getPreferences().then(function (prefs) {
+      if (prefs && Array.isArray(prefs.hidden_widgets) && prefs.hidden_widgets.length) {
+        state.hidden = prefs.hidden_widgets; save(STORE.hidden, state.hidden); applyHiddenSections();
       }
     }).catch(function () {});
 
-    if (!window.location.hash) {
-      window.location.hash = "#/dashboard";
-    } else {
-      runRoute(getHashRoute());
-    }
-  });
+    try { await busy(refreshDatasets(false)); } catch (_) { toast("Your datasets could not be loaded. Check the connection and reload.", "bad"); }
+    showRoute(parseHash());
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { moveNavMarker(); syncAllSegmented(); });
+  }
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();
 })();

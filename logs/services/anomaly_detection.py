@@ -27,13 +27,10 @@ from __future__ import annotations
 import logging
 import math
 
-from django.core.cache import cache
-from django.db.models import Avg, Count, Q
-from django.db.models.functions import TruncHour
+from logs.services import rollup
+from logs.services.scope import cached_result
 
 logger = logging.getLogger(__name__)
-
-HOURLY_CACHE_TTL = 15 * 60
 
 METHOD_STATISTICAL = "statistical"
 METHOD_ISOLATION_FOREST = "isolation_forest"
@@ -68,6 +65,7 @@ ISOLATION_FOREST_TREES = 200
 # Public entry point
 # ---------------------------------------------------------------------------
 
+@cached_result("anomalies")
 def get_anomalies(
     dataset_id: int,
     owner,
@@ -189,40 +187,9 @@ def _hourly_buckets(dataset_id: int, owner) -> list[dict]:
         {"hour": datetime, "total": int, "errors": int,
          "unique_ips": int, "avg_size": float | None}
 
-    A single GROUP BY query feeds both detection methods.  The result is cached
-    briefly so that re-running with another method or sensitivity is instant.
+    Read from the dataset's hourly roll-up, so no raw log rows are scanned.
     """
-    from logs.models import Dataset, LogEntry  # local import avoids circular deps
-
-    # total_entries changes whenever rows are added, which retires the old key.
-    total_entries = (
-        Dataset.objects.filter(pk=dataset_id, owner=owner)
-        .values_list("total_entries", flat=True)
-        .first()
-    )
-    if total_entries is None:
-        return []
-    cache_key = f"anomalies:hourly:{dataset_id}:{total_entries}"
-    cached = cache.get(cache_key)
-    if cached is not None:
-        return cached
-
-    rows = (
-        LogEntry.objects
-        .filter(dataset_id=dataset_id, dataset__owner=owner)
-        .annotate(hour=TruncHour("timestamp"))
-        .values("hour")
-        .annotate(
-            total=Count("id"),
-            errors=Count("id", filter=Q(error_flag=True)),
-            unique_ips=Count("ip_address", distinct=True),
-            avg_size=Avg("response_size"),
-        )
-        .order_by("hour")
-    )
-    buckets = [row for row in rows if row["hour"] is not None and row["total"] > 0]
-    cache.set(cache_key, buckets, HOURLY_CACHE_TTL)
-    return buckets
+    return [row for row in rollup.hourly_rows(dataset_id, owner) if row["total"] > 0]
 
 
 def _label(hour) -> str:

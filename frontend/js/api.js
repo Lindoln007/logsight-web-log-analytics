@@ -62,6 +62,9 @@
     if (q.search)   parts.push("search="   + encodeURIComponent(q.search));
     if (q.dateFrom) parts.push("date_from=" + encodeURIComponent(q.dateFrom));
     if (q.dateTo)   parts.push("date_to="   + encodeURIComponent(q.dateTo));
+    if (q.ip)       parts.push("ip_address=" + encodeURIComponent(q.ip));
+    if (q.method)   parts.push("method="    + encodeURIComponent(q.method));
+    if (q.endpoint) parts.push("endpoint="  + encodeURIComponent(q.endpoint));
     return parts.length ? base + "?" + parts.join("&") : base;
   }
 
@@ -92,7 +95,10 @@
 
   let _currentDatasetId = null;
   const _responseCache = new Map();
-  const RESPONSE_CACHE_TTL_MS = 30 * 1000;
+  // Results for a parsed dataset do not change, so responses are reused for a
+  // while; the app invalidates them itself after uploads, deletes and refreshes.
+  const RESPONSE_CACHE_TTL_MS = 5 * 60 * 1000;
+  const RESPONSE_CACHE_MAX = 300;
 
   // ---------------------------------------------------------------------------
   // HTTP helpers
@@ -145,6 +151,10 @@
     var value = cached && cached.value && typeof cached.value.then === "function"
       ? cached.value
       : fetchJson(url, options);
+    if (_responseCache.size >= RESPONSE_CACHE_MAX) {
+      // Drop the oldest entry (Map keeps insertion order).
+      _responseCache.delete(_responseCache.keys().next().value);
+    }
     _responseCache.set(cacheKey, { createdAt: now, value: value });
 
     var result = await value;
@@ -306,6 +316,11 @@
     /** Retrieve the currently selected dataset ID. */
     getCurrentDataset: function () {
       return _currentDatasetId;
+    },
+
+    /** Drop cached responses whose key starts with *prefix* (all if omitted). */
+    invalidate: function (prefix) {
+      clearResponseCache(prefix);
     },
 
     // ---- Dataset management --------------------------------------------------
@@ -478,6 +493,7 @@
       return {
         available: true,
         interval: result.data.interval || interval,
+        timestamps: items.map(function (item) { return item.timestamp || null; }),
         labels: items.map(function (item) {
           return item.timestamp ? formatHourLabel(item.timestamp) : "";
         }),
@@ -593,7 +609,7 @@
       var id = datasetId || _currentDatasetId;
       if (!id) return { available: false, total_errors: 0, errors_4xx: 0, errors_5xx: 0 };
 
-      var result = await fetchJson(analyticsUrl(id, "errors"), { method: "GET" });
+      var result = await fetchCachedJson("errors:" + id, analyticsUrl(id, "errors"), { method: "GET" });
       if (!result.ok || !result.data) {
         return { available: false, total_errors: 0, errors_4xx: 0, errors_5xx: 0 };
       }
@@ -609,11 +625,7 @@
 
       var result = await fetchJson(analyticsUrl(id, "refresh"), { method: "POST" });
       if (!result.ok) throw new Error("Analytics refresh failed.");
-      clearResponseCache("summary:" + id);
-      clearResponseCache("trends:" + id);
-      clearResponseCache("status:" + id);
-      clearResponseCache("endpoints:" + id);
-      clearResponseCache("hourly:" + id);
+      clearResponseCache();
       return result.data || { refreshed: true };
     },
 
@@ -634,7 +646,7 @@
 
       if (!url) return emptyLogLines(page, pageSize);
 
-      var result = await fetchJson(url, { method: "GET" });
+      var result = await fetchCachedJson("entries:" + id + ":" + url, url, { method: "GET" });
       if (!result.ok || !result.data) return emptyLogLines(page, pageSize);
 
       var d = result.data;
@@ -670,7 +682,7 @@
         "periods=" + encodeURIComponent(p.periods || 24) +
         "&method=" + encodeURIComponent(p.method || "moving_avg");
 
-      var result = await fetchJson(url, { method: "GET" });
+      var result = await fetchCachedJson("forecast:" + id + ":" + url, url, { method: "GET" });
       if (!result.ok || !result.data) {
         return { available: false, historical: [], forecast: [], trend: "stable", summary: {} };
       }
@@ -694,7 +706,7 @@
         "?sensitivity=" + encodeURIComponent(sensitivity) +
         "&method=" + encodeURIComponent(method);
 
-      var result = await fetchJson(url, { method: "GET" });
+      var result = await fetchCachedJson("anomalies:" + id + ":" + url, url, { method: "GET" });
       if (!result.ok || !result.data) {
         return { available: false, anomalies: [], summary: { total_anomalies: 0 } };
       }
@@ -770,7 +782,7 @@
     async getSecurityInsights(datasetId) {
       var id = datasetId || _currentDatasetId;
       if (!id) throw new Error("No dataset selected.");
-      var result = await fetchJson("/logs/datasets/" + encodeURIComponent(id) + "/security/");
+      var result = await fetchCachedJson("security:" + id, "/logs/datasets/" + encodeURIComponent(id) + "/security/");
       if (!result.ok) throw new Error("Security analysis failed.");
       return result.data;
     },
@@ -779,7 +791,7 @@
 
     async compareDatasets(idA, idB) {
       if (!idA || !idB) throw new Error("Two dataset IDs required.");
-      var result = await fetchJson("/logs/compare/?a=" + encodeURIComponent(idA) + "&b=" + encodeURIComponent(idB));
+      var result = await fetchCachedJson("compare:" + idA + ":" + idB, "/logs/compare/?a=" + encodeURIComponent(idA) + "&b=" + encodeURIComponent(idB));
       if (!result.ok) throw new Error("Comparison failed.");
       return result.data;
     },

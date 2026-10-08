@@ -916,3 +916,63 @@ All endpoints require authentication. All dataset-scoped endpoints filter by `da
 ---
 
 *LogSight — Final Year Project · Web-Based Log Analytics & Visualization System*
+
+---
+
+## Interface (version 8 redesign)
+
+The whole interface was redesigned in version 8. The backend endpoints are unchanged; the navigation, layout and visual system are new. Design intent is recorded in `.impeccable.md`.
+
+### Information architecture
+
+A left sidebar replaces the top menu. One **working dataset** is chosen in the sidebar and every page reads from it, so no page has its own dataset picker.
+
+| Sidebar item | Route | Replaces |
+|---|---|---|
+| Overview | `#/overview` | Dashboard |
+| Datasets | `#/datasets` | Datasets + Upload Logs (upload is now part of this page) |
+| Explore | `#/explore` | Log Viewer + Advanced Search (one filterable table) |
+| Forecast, Anomalies, Security, Compare | `#/forecast` etc. | Same modules; each runs automatically for the working dataset |
+| Reports | `#/reports` | Reports |
+
+Old hashes (`#/dashboard`, `#/upload`, `#/viewer`, `#/search`) redirect to their new homes. Alerts, Live Ingestion and User Management remain behind the "planned" page.
+
+### Page pattern
+
+Every analysis page opens with the finding written as a sentence, then the supporting chart or table, then a "How this method works" disclosure. Findings link to the matching rows in Explore.
+
+### Files
+
+| File | Purpose |
+|---|---|
+| `frontend/css/logsight.css` | Design system: tokens, components, motion, responsive rules. Replaces Tailwind. |
+| `frontend/js/app.js` | Router, working-dataset state and one loader per page |
+| `frontend/js/charts.js` | Chart.js wrappers with the shared chart style |
+| `logs/templates/logs/app_shell.html` | Application shell and page scaffolding |
+| `logs/templates/logs/_head.html`, `_icons.html` | Shared fonts/stylesheet and the icon sprite |
+| `accounts/templates/accounts/` | Sign in, register, invite, pending, profile and password recovery |
+| `logs/templates/404.html`, `403.html`, `500.html` | Error pages |
+
+### Added behaviour
+
+- Password recovery by email (`/accounts/password-reset/`), using the built-in Django flow.
+- Explore passes client, method and path filters to the server (the old Advanced Search sent them but they were dropped).
+- Global search in the top bar (shortcut `/`) opens Explore filtered by the typed text.
+
+---
+
+## Performance design
+
+A parsed dataset never changes, so the system does expensive work once and reuses it.
+
+| Layer | What it does | File |
+|---|---|---|
+| Hourly roll-up | `HourlyStat` holds one row per hour (requests, errors, unique clients, bytes). It is filled while the file is parsed, at no extra cost. Traffic over time, time of day, anomaly detection and forecasting read it instead of grouping the raw log rows. Older datasets are rolled up on first use. | `logs/services/rollup.py` |
+| Scoped queries | Ownership is checked with one primary-key lookup, then queries filter on `dataset_id` only. This removes a join from every analytics query. | `logs/services/scope.py` |
+| Result cache | Analytics, anomaly, forecast and security results are cached on disk (`.cache/`) for 7 days, so they survive restarts and are shared by all workers. `cached_result` keys include a per-dataset version; `invalidate_analytics_cache` bumps it. | `logs/services/scope.py`, `settings.CACHES` |
+| Pre-computation | After an upload finishes, the background thread computes the default anomaly, forecast and security results so those pages open instantly. | `logs/services/dataset_management.py` |
+| Entry counts | The log table uses the stored entry total when no filter is set, and remembers the count for each filter combination, so paging never recounts. | `logs/services/log_entries.py` |
+| Browser | A page keeps its rendered result while hidden and is only reloaded when its dataset or settings change. API responses are reused for 5 minutes. | `frontend/js/app.js`, `frontend/js/api.js` |
+| Transport | JSON and HTML responses are gzip-compressed. | `settings.MIDDLEWARE` |
+
+Tests run with an in-memory cache so they never read or clear the real one. Set `LOGSIGHT_CACHE_DIR` to move the cache directory.

@@ -186,6 +186,39 @@ class LogEntry(models.Model):
         return f"{self.ip_address} {self.method} {self.endpoint} → {self.status_code}"
 
 
+class HourlyStat(models.Model):
+    """
+    One row per hour of a dataset: the pre-aggregated figures that the
+    time-based pages (traffic over time, time of day, anomaly detection,
+    forecasting) read instead of grouping the raw log entries on each request.
+    Built while the file is parsed; see ``logs/services/rollup.py``.
+    """
+
+    dataset = models.ForeignKey(
+        Dataset,
+        on_delete=models.CASCADE,
+        related_name="hourly_stats",
+    )
+    hour = models.DateTimeField(help_text="Start of the hour (UTC).")
+    requests = models.IntegerField(default=0)
+    errors = models.IntegerField(default=0)
+    unique_ips = models.IntegerField(default=0)
+    bytes_total = models.BigIntegerField(default=0)
+    sized_requests = models.IntegerField(
+        default=0,
+        help_text="Requests that reported a response size (the divisor for the average).",
+    )
+
+    class Meta:
+        ordering = ["hour"]
+        constraints = [
+            models.UniqueConstraint(fields=["dataset", "hour"], name="hourlystat_dataset_hour_uniq"),
+        ]
+
+    def __str__(self):
+        return f"{self.dataset_id} @ {self.hour:%Y-%m-%d %H:00}: {self.requests}"
+
+
 class AnalyticsSummary(models.Model):
     """
     Stores precomputed aggregate statistics for a Dataset.

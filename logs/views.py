@@ -518,6 +518,8 @@ def analytics_refresh_view(request: HttpRequest, dataset_id: int) -> JsonRespons
     if error:
         return error
 
+    from logs.services import rollup
+    rollup.rebuild(dataset_id)
     summary = compute_and_persist_analytics(dataset_id)
     return JsonResponse(
         {

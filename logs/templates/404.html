@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    {% include "logs/_head.html" %}
+    <title>Page not found · LogSight</title>
+  </head>
+  <body>
+    <div class="solo">
+      <header class="solo-bar"><a class="brand" href="/" style="padding:0"><span class="brand-name">Log<i>Sight</i></span></a></header>
+      <main class="solo-body">
+        <p class="error-code" aria-hidden="true">404</p>
+        <div>
+          <h1 class="page-title">That page is not in the log</h1>
+          <p class="lede-sub">The address may be mistyped, or the dataset it pointed to may have been deleted.</p>
+        </div>
+        <div class="page-actions"><a class="btn btn-primary" href="/">Back to the workspace</a></div>
+      </main>
+    </div>
+  </body>
+</html>

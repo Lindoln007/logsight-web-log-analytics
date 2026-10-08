@@ -24,6 +24,11 @@ import logging
 from collections import defaultdict
 from typing import Any
 
+from django.core.cache import cache
+
+from logs.ml.security_model import MODEL_PATH
+from logs.services.scope import RESULT_TTL, entries_for, owns, result_key
+
 logger = logging.getLogger(__name__)
 
 # Sensitive endpoint substrings that indicate reconnaissance / exploitation attempts.
@@ -76,10 +81,30 @@ def get_security_insights(dataset_id: int, owner) -> dict[str, Any]:
         }
 
     All model imports are local to avoid circular dependency issues.
-    """
-    from logs.models import LogEntry
 
-    base_qs = LogEntry.objects.filter(dataset_id=dataset_id, dataset__owner=owner)
+    The finished report is cached per dataset and per trained-model file, so
+    reopening the page (or the overview that summarises it) costs nothing.
+    """
+    if not owns(dataset_id, owner):
+        return _build_security_insights(dataset_id, owner)
+    try:
+        model_stamp = int(MODEL_PATH.stat().st_mtime)
+    except OSError:
+        model_stamp = 0
+    cache_key = result_key("security", dataset_id, model_stamp)
+    report = cache.get(cache_key)
+    if report is None:
+        report = _build_security_insights(dataset_id, owner)
+        # A report built while the classifier was unavailable is not kept, so
+        # the page recovers by itself once the model can be loaded.
+        if report.get("classification", {}).get("available"):
+            cache.set(cache_key, report, RESULT_TTL)
+    return report
+
+
+def _build_security_insights(dataset_id: int, owner) -> dict[str, Any]:
+    """Run every check and assemble the report (uncached)."""
+    base_qs = entries_for(dataset_id, owner)
 
     findings: list[dict[str, Any]] = []
     risk_components: list[float] = []

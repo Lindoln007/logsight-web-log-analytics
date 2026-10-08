@@ -1,642 +1,247 @@
 /**
- * Chart.js instances — theme-aware; renders polished empty states until backend data is available.
+ * LogSight charts — a thin layer over Chart.js that gives every chart the
+ * same editorial treatment: ink lines on paper, hairline grid, one accent.
+ *
+ * Colours are hex equivalents of the CSS tokens in logsight.css (Chart.js
+ * cannot derive hover shades from oklch()).
  */
 (function (global) {
-  const charts = {};
-  let emptyStatePluginRegistered = false;
+  "use strict";
 
-  function ensureEmptyStatePlugin() {
-    if (emptyStatePluginRegistered || typeof Chart === "undefined") return;
+  var C = {
+    ink: "#1b2030",
+    ink2: "#4a5166",
+    ink3: "#6b7285",
+    rule: "#e2e5ec",
+    paper: "#f9fafc",
+    accent: "#2f4fd8",
+    accentFill: "rgba(47, 79, 216, 0.13)",
+    inkFill: "rgba(27, 32, 48, 0.07)",
+    bad: "#c63a2c",
+    warn: "#cf9426",
+  };
+  var FONT = "'Libre Franklin', system-ui, sans-serif";
+  var charts = {};
+  var reduceMotion = global.matchMedia && global.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-    Chart.register({
-      id: "logSightEmptyState",
-      afterDraw: function (chart, _args, pluginOptions) {
-        if (!pluginOptions || !pluginOptions.enabled) return;
-        if (chartHasData(chart)) return;
-
-        const ctx = chart.ctx;
-        const area = chart.chartArea;
-        if (!area) return;
-
-        ctx.save();
-        ctx.textAlign = "center";
-        ctx.fillStyle = pluginOptions.color || "#94a3b8";
-        ctx.font = pluginOptions.titleFont || "600 14px Inter, system-ui, sans-serif";
-        ctx.fillText(pluginOptions.title || "No data available yet", (area.left + area.right) / 2, area.top + area.height / 2 - 4);
-        if (pluginOptions.description) {
-          ctx.font = pluginOptions.bodyFont || "400 12px Inter, system-ui, sans-serif";
-          ctx.fillText(pluginOptions.description, (area.left + area.right) / 2, area.top + area.height / 2 + 18);
-        }
-        ctx.restore();
-      },
-    });
-
-    emptyStatePluginRegistered = true;
+  function destroy(key) {
+    if (charts[key]) { charts[key].destroy(); delete charts[key]; }
   }
 
-  function chartHasData(chart) {
-    return chart.data.datasets.some(function (dataset) {
-      return Array.isArray(dataset.data) && dataset.data.some(function (value) {
-        return typeof value === "number" && !Number.isNaN(value);
-      });
-    });
+  function context(canvasId) {
+    var el = document.getElementById(canvasId);
+    return el ? el.getContext("2d") : null;
   }
 
-  function getThemeColors() {
-    const dark = document.documentElement.classList.contains("dark");
-    return {
-      dark: dark,
-      text: dark ? "#e6edf3" : "#16202a",
-      textMuted: dark ? "#94a3b1" : "#607080",
-      grid: dark ? "rgba(148,163,184,0.13)" : "rgba(96,112,128,0.18)",
-      primary: "#0891b2",
-      primarySoft: dark ? "rgba(8,145,178,0.24)" : "rgba(8,145,178,0.14)",
-      accent: "#14b8a6",
-      danger: "#dc2626",
-      warn: "#d97706",
-      success: "#059669",
-    };
+  function number(v) {
+    return v == null ? "" : Number(v).toLocaleString("en");
   }
 
-  function defaultChartOptions() {
-    const c = getThemeColors();
-    return {
+  function baseOptions(extra) {
+    var options = {
       responsive: true,
       maintainAspectRatio: false,
-      animation: { duration: 520, easing: "easeOutQuart" },
+      animation: reduceMotion ? false : { duration: 900, easing: "easeOutQuart" },
+      interaction: { mode: "index", intersect: false },
+      layout: { padding: { top: 8, right: 4 } },
       plugins: {
-        legend: {
-          labels: { color: c.text, font: { family: "'Inter', system-ui, sans-serif", size: 11 } },
-        },
-        logSightEmptyState: {
-          enabled: true,
-          color: c.textMuted,
-          title: "No analytics data yet",
-          description: "Connect backend metrics to populate this chart.",
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: C.ink,
+          titleColor: "#ffffff",
+          bodyColor: "#d9dce6",
+          titleFont: { family: FONT, size: 12, weight: "600" },
+          bodyFont: { family: FONT, size: 12 },
+          padding: 10,
+          cornerRadius: 6,
+          boxWidth: 8,
+          boxHeight: 8,
+          boxPadding: 4,
+          displayColors: true,
+          usePointStyle: true,
+          callbacks: {
+            label: function (item) {
+              if (item.raw == null) return null;
+              return " " + item.dataset.label + ": " + number(item.raw);
+            },
+          },
         },
       },
-      scales: {},
+      scales: {
+        x: {
+          grid: { display: false },
+          border: { color: C.ink },
+          ticks: { color: C.ink3, font: { family: FONT, size: 11 }, maxRotation: 0, autoSkipPadding: 24, maxTicksLimit: 9 },
+        },
+        y: {
+          beginAtZero: true,
+          grid: { color: C.rule, drawTicks: false },
+          border: { display: false },
+          ticks: { color: C.ink3, font: { family: FONT, size: 11 }, padding: 8, maxTicksLimit: 5, callback: function (v) { return number(v); } },
+        },
+      },
     };
+    if (extra && extra.plugins) Object.assign(options.plugins, extra.plugins);
+    return options;
   }
 
-  function destroyChart(key) {
-    if (charts[key]) {
-      charts[key].destroy();
-      delete charts[key];
-    }
-  }
-
-  function destroyAll() {
-    Object.keys(charts).forEach(destroyChart);
-  }
-
-  function renderRequestFrequency(canvasId, data) {
-    ensureEmptyStatePlugin();
-    destroyChart("freq");
-    const el = document.getElementById(canvasId);
-    if (!el) return;
-    const c = getThemeColors();
-    const ctx = el.getContext("2d");
-    const grad = ctx.createLinearGradient(0, 0, 0, el.height || 200);
-    grad.addColorStop(0, c.primarySoft);
-    grad.addColorStop(1, "transparent");
-    const series = data && data.datasets && data.datasets[0] ? data.datasets[0] : { label: "Requests", data: [] };
-
-    charts.freq = new Chart(ctx, {
+  /** Requests over time: a single ink line with a faint fill. */
+  function traffic(canvasId, labels, values) {
+    destroy(canvasId);
+    var ctx = context(canvasId);
+    if (!ctx) return;
+    charts[canvasId] = new Chart(ctx, {
       type: "line",
       data: {
-        labels: data && data.labels ? data.labels : [],
-        datasets: [
-          {
-            label: series.label || "Requests",
-            data: Array.isArray(series.data) ? series.data : [],
-            borderColor: c.primary,
-            backgroundColor: grad,
-            fill: true,
-            tension: 0.4,
-            borderWidth: 2,
-            pointRadius: 0,
-            pointHoverRadius: 5,
-          },
-        ],
+        labels: labels,
+        datasets: [{
+          label: "Requests", data: values,
+          borderColor: C.ink, backgroundColor: C.inkFill, fill: true,
+          borderWidth: 1.6, tension: 0.25, pointRadius: 0, pointHoverRadius: 4,
+          pointHoverBackgroundColor: C.accent, pointHoverBorderColor: C.paper, pointHoverBorderWidth: 2,
+        }],
       },
-      options: {
-        ...defaultChartOptions(),
-        interaction: { intersect: false, mode: "index" },
-        plugins: {
-          ...defaultChartOptions().plugins,
-          tooltip: {
-            backgroundColor: c.dark ? "#1e293b" : "#fff",
-            titleColor: c.text,
-            bodyColor: c.textMuted,
-            borderColor: c.grid,
-            borderWidth: 1,
-            padding: 12,
-            cornerRadius: 8,
-          },
-        },
-        scales: {
-          x: {
-            grid: { color: c.grid },
-            ticks: { color: c.textMuted, maxRotation: 45 },
-          },
-          y: {
-            beginAtZero: true,
-            grid: { color: c.grid },
-            ticks: { color: c.textMuted },
-          },
-        },
-      },
+      options: baseOptions(),
     });
   }
 
-  function renderStatusDoughnut(canvasId, dist) {
-    ensureEmptyStatePlugin();
-    destroyChart("status");
-    const el = document.getElementById(canvasId);
-    if (!el) return;
-    const c = getThemeColors();
-
-    charts.status = new Chart(el, {
-      type: "doughnut",
-      data: {
-        labels: dist && dist.labels ? dist.labels : [],
-        datasets: [
-          {
-            data: dist && dist.data ? dist.data : [],
-            backgroundColor: [c.success, "#60a5fa", c.warn, c.danger],
-            borderWidth: 0,
-            hoverOffset: 10,
-          },
-        ],
-      },
-      options: {
-        ...defaultChartOptions(),
-        cutout: "62%",
-        plugins: {
-          ...defaultChartOptions().plugins,
-          legend: {
-            position: "bottom",
-            labels: { color: c.text, padding: 14, usePointStyle: true },
-          },
-          tooltip: {
-            backgroundColor: c.dark ? "#1e293b" : "#fff",
-            titleColor: c.text,
-            bodyColor: c.textMuted,
-            borderColor: c.grid,
-            borderWidth: 1,
-          },
-        },
-      },
-    });
-  }
-
-  function renderTopEndpoints(canvasId, payload) {
-    ensureEmptyStatePlugin();
-    destroyChart("endpoints");
-    const el = document.getElementById(canvasId);
-    if (!el) return;
-    const c = getThemeColors();
-    const items = payload && payload.items ? payload.items : [];
-    const labels = items.map(function (item) {
-      // api.js normalises to .label; fall back to raw .endpoint for resilience.
-      const path = item.label || item.endpoint || item.path || "";
-      return path.length > 28 ? "\u2026" + path.slice(-26) : path;
-    });
-    const values = items.map(function (item) {
-      // api.js normalises to .value; fall back to raw .count.
-      return item.value || item.count || 0;
-    });
-
-    charts.endpoints = new Chart(el, {
+  /** Requests by hour of day: bars, with the busiest hour in the accent. */
+  function hours(canvasId, labels, values, peakIndex) {
+    destroy(canvasId);
+    var ctx = context(canvasId);
+    if (!ctx) return;
+    var options = baseOptions();
+    options.scales.x.ticks.maxTicksLimit = 8;
+    charts[canvasId] = new Chart(ctx, {
       type: "bar",
       data: {
         labels: labels,
-        datasets: [
-          {
-            label: "Requests",
-            data: values,
-            backgroundColor: values.map(function (_, index) {
-              const alpha = 0.85 - (index % 4) * 0.1;
-              return c.dark ? "rgba(20,184,166," + alpha + ")" : "rgba(8,145,178," + alpha + ")";
-            }),
-            borderRadius: 6,
-            borderSkipped: false,
-          },
-        ],
+        datasets: [{
+          label: "Requests", data: values,
+          backgroundColor: values.map(function (_, i) { return i === peakIndex ? C.accent : C.ink; }),
+          hoverBackgroundColor: C.accent,
+          borderRadius: 2, barPercentage: 0.78, categoryPercentage: 0.9,
+        }],
       },
-      options: {
-        indexAxis: "y",
-        ...defaultChartOptions(),
-        plugins: {
-          ...defaultChartOptions().plugins,
-          legend: { display: false },
-          tooltip: {
-            backgroundColor: c.dark ? "#1e293b" : "#fff",
-            titleColor: c.text,
-            bodyColor: c.textMuted,
-            borderColor: c.grid,
-            borderWidth: 1,
-          },
-        },
-        scales: {
-          x: {
-            beginAtZero: true,
-            grid: { color: c.grid },
-            ticks: { color: c.textMuted },
-          },
-          y: {
-            grid: { display: false },
-            ticks: { color: c.textMuted, font: { size: 10 } },
-          },
-        },
-      },
+      options: options,
     });
   }
 
-  function renderTrafficArea(canvasId, data) {
-    ensureEmptyStatePlugin();
-    destroyChart("traffic");
-    const el = document.getElementById(canvasId);
-    if (!el) return;
-    const c = getThemeColors();
-    const ctx = el.getContext("2d");
-    const g1 = ctx.createLinearGradient(0, 0, 0, el.height || 200);
-    g1.addColorStop(0, "rgba(34,211,238,0.35)");
-    g1.addColorStop(1, "transparent");
-    const first = data && data.datasets && data.datasets[0] ? data.datasets[0] : { label: "Requests by Hour", data: [] };
+  /**
+   * Forecast: recent recorded traffic (ink), forecast (dashed accent) and the
+   * likely range (accent band).  A vertical rule marks where the log ends.
+   */
+  function forecast(canvasId, data) {
+    destroy(canvasId);
+    var ctx = context(canvasId);
+    if (!ctx) return;
 
-    charts.traffic = new Chart(ctx, {
-      type: "line",
-      data: {
-        labels: data && data.labels ? data.labels : [],
-        datasets: [
-          {
-            label: first.label || "Requests by Hour",
-            data: Array.isArray(first.data) ? first.data : [],
-            borderColor: c.accent,
-            backgroundColor: g1,
-            fill: true,
-            tension: 0.35,
-            borderWidth: 2,
-            pointRadius: 0,
-          },
-        ],
+    var fc = Array.isArray(data.forecast) ? data.forecast : [];
+    var all = Array.isArray(data.historical) ? data.historical : [];
+    // Enough history to give the forecast context without dwarfing it.
+    var history = all.slice(-Math.max(72, fc.length * 3));
+    var n = history.length;
+    if (!n && !fc.length) return;
+
+    var labels = history.map(function (p) { return p.label; }).concat(fc.map(function (p) { return p.label; }));
+    var last = n ? history[n - 1].value : null;
+    var pad = history.map(function () { return null; });
+    var bridge = function (key) {
+      var series = pad.slice(0, Math.max(0, n - 1));
+      if (n) series.push(last);
+      return series.concat(fc.map(function (p) { return p[key] != null ? p[key] : p.value; }));
+    };
+
+    var endOfLog = {
+      id: "endOfLog",
+      afterDatasetsDraw: function (chart) {
+        if (!n || !fc.length) return;
+        var x = chart.scales.x.getPixelForValue(n - 1);
+        var area = chart.chartArea;
+        var c = chart.ctx;
+        c.save();
+        c.strokeStyle = C.ink3; c.lineWidth = 1; c.setLineDash([3, 3]);
+        c.beginPath(); c.moveTo(x, area.top); c.lineTo(x, area.bottom); c.stroke();
+        c.setLineDash([]); c.fillStyle = C.ink3; c.font = "11px " + FONT; c.textAlign = "right";
+        c.fillText("end of log", x - 6, area.top + 10);
+        c.restore();
       },
-      options: {
-        ...defaultChartOptions(),
-        interaction: { intersect: false, mode: "index" },
-        plugins: {
-          ...defaultChartOptions().plugins,
-          tooltip: {
-            backgroundColor: c.dark ? "#1e293b" : "#fff",
-            titleColor: c.text,
-            bodyColor: c.textMuted,
-            borderColor: c.grid,
-            borderWidth: 1,
-          },
-        },
-        scales: {
-          x: {
-            grid: { color: c.grid },
-            ticks: { color: c.textMuted, maxRotation: 45 },
-          },
-          y: {
-            beginAtZero: true,
-            grid: { color: c.grid },
-            ticks: { color: c.textMuted },
-          },
-        },
-      },
-    });
-  }
+    };
 
-  // ---------------------------------------------------------------------------
-  // Forecast chart
-  // ---------------------------------------------------------------------------
-  //
-  // Renders two overlaid line series on a single chart:
-  //   - "Historical" (solid indigo line) for actual recorded request counts.
-  //   - "Forecast"   (dashed amber line) for predicted future values.
-  //
-  // The two series share the same x-axis labels (concatenated timestamps).
+    var options = baseOptions();
+    options.plugins.tooltip.filter = function (item) { return item.dataset.label !== "Low" && item.raw != null; };
 
-  function renderForecastChart(canvasId, data) {
-    ensureEmptyStatePlugin();
-    destroyChart("forecast");
-    const el = document.getElementById(canvasId);
-    if (!el) return;
-    const c = getThemeColors();
-    const ctx = el.getContext("2d");
-
-    const fullHistory = data && Array.isArray(data.historical) ? data.historical : [];
-    const forecast    = data && Array.isArray(data.forecast)   ? data.forecast   : [];
-
-    // Plot only the most recent history (at least a week, or 3x the forecast
-    // length) so the forecast is not squeezed into a sliver at the right edge.
-    const historical = fullHistory.slice(-Math.max(168, forecast.length * 3));
-
-    const histLabels = historical.map(function (p) { return p.label || ""; });
-    const fcstLabels = forecast.map(function (p) { return p.label || ""; });
-    const allLabels  = histLabels.concat(fcstLabels);
-
-    const nHist    = historical.length;
-    const nullHist = historical.map(function () { return null; });
-
-    // Historical line: real values, then nulls.
-    const histValues = historical.map(function (p) { return p.value; })
-      .concat(forecast.map(function () { return null; }));
-
-    // Forecast line: nulls up to last historical point, then connect + forecast values.
-    const connectValue = nHist > 0 ? historical[nHist - 1].value : null;
-    const fcstPad      = new Array(Math.max(0, nHist - 1)).fill(null);
-    const fcstValues   = fcstPad.concat([connectValue]).concat(forecast.map(function (p) { return p.value; }));
-
-    // Confidence band — upper bound.
-    const upperValues = nullHist.concat([connectValue]).concat(forecast.map(function (p) { return p.upper != null ? p.upper : p.value; }));
-    // Confidence band — lower bound (filled between lower and upper using Chart.js fill).
-    const lowerValues = nullHist.concat([connectValue]).concat(forecast.map(function (p) { return p.lower != null ? p.lower : p.value; }));
-
-    const gradHist = ctx.createLinearGradient(0, 0, 0, el.height || 200);
-    gradHist.addColorStop(0, c.primarySoft);
-    gradHist.addColorStop(1, "transparent");
-
-    // Amber band fill colour (very translucent).
-    const bandFill = c.dark ? "rgba(251,191,36,0.12)" : "rgba(251,191,36,0.10)";
-
-    charts.forecast = new Chart(ctx, {
-      type: "line",
-      data: {
-        labels: allLabels,
-        datasets: [
-          {
-            label: "Historical",
-            data: histValues,
-            borderColor: c.primary,
-            backgroundColor: gradHist,
-            fill: true,
-            tension: 0.35,
-            borderWidth: 2,
-            pointRadius: 0,
-            pointHoverRadius: 4,
-            spanGaps: false,
-            order: 1,
-          },
-          {
-            label: "Upper bound",
-            data: upperValues,
-            borderColor: "transparent",
-            backgroundColor: bandFill,
-            fill: "+1",          // fill down to the lower-bound dataset
-            tension: 0.35,
-            borderWidth: 0,
-            pointRadius: 0,
-            pointHoverRadius: 0,
-            spanGaps: false,
-            order: 3,
-          },
-          {
-            label: "Lower bound",
-            data: lowerValues,
-            borderColor: "transparent",
-            backgroundColor: "transparent",
-            fill: false,
-            tension: 0.35,
-            borderWidth: 0,
-            pointRadius: 0,
-            pointHoverRadius: 0,
-            spanGaps: false,
-            order: 4,
-          },
-          {
-            label: "Forecast",
-            data: fcstValues,
-            borderColor: c.warn,
-            backgroundColor: "transparent",
-            fill: false,
-            tension: 0.35,
-            borderWidth: 2,
-            borderDash: [6, 4],
-            pointRadius: 0,
-            pointHoverRadius: 4,
-            spanGaps: false,
-            order: 2,
-          },
-        ],
-      },
-      options: {
-        ...defaultChartOptions(),
-        interaction: { intersect: false, mode: "index" },
-        plugins: {
-          ...defaultChartOptions().plugins,
-          legend: {
-            labels: {
-              color: c.text,
-              font: { family: "'Inter', system-ui, sans-serif", size: 11 },
-              usePointStyle: true,
-              filter: function (item) {
-                // Hide the band helper datasets from the legend.
-                return item.text !== "Upper bound" && item.text !== "Lower bound";
-              },
-            },
-          },
-          tooltip: {
-            backgroundColor: c.dark ? "#1e293b" : "#fff",
-            titleColor: c.text,
-            bodyColor: c.textMuted,
-            borderColor: c.grid,
-            borderWidth: 1,
-            padding: 12,
-            cornerRadius: 8,
-            filter: function (item) {
-              // Only show Historical and Forecast in tooltip.
-              return item.raw !== null &&
-                item.dataset.label !== "Upper bound" &&
-                item.dataset.label !== "Lower bound";
-            },
-          },
-          logSightEmptyState: { enabled: false },
-        },
-        scales: {
-          x: {
-            grid: { color: c.grid },
-            ticks: { color: c.textMuted, maxRotation: 45, maxTicksLimit: 16 },
-          },
-          y: {
-            beginAtZero: true,
-            grid: { color: c.grid },
-            ticks: { color: c.textMuted },
-          },
-        },
-      },
-    });
-  }
-
-  // ---------------------------------------------------------------------------
-  // Anomaly detection chart
-  // ---------------------------------------------------------------------------
-  //
-  // Renders the full hourly request series as a blue area chart, then overlays
-  // red scatter-point markers at each detected anomalous hour.
-
-  function renderAnomalyChart(canvasId, historicalData, anomalies) {
-    ensureEmptyStatePlugin();
-    destroyChart("anomalies");
-    const el = document.getElementById(canvasId);
-    if (!el) return;
-    const c = getThemeColors();
-    const ctx = el.getContext("2d");
-
-    const hist   = Array.isArray(historicalData) ? historicalData : [];
-    const anomArr = Array.isArray(anomalies)     ? anomalies      : [];
-
-    const labels = hist.map(function (p) { return p.label || ""; });
-    const values = hist.map(function (p) { return p.value; });
-
-    // Build a lookup: label → value for anomaly overlay.
-    const anomalySet = {};
-    // The caller decides which anomalies belong on the chart.
-    anomArr.forEach(function (a) {
-      anomalySet[a.label] = a.value;
-    });
-
-    // Anomaly scatter data aligned to the same x-axis.
-    const anomalyPoints = labels.map(function (lbl, i) {
-      return Object.prototype.hasOwnProperty.call(anomalySet, lbl) ? values[i] : null;
-    });
-
-    const grad = ctx.createLinearGradient(0, 0, 0, el.height || 200);
-    grad.addColorStop(0, "rgba(99,102,241,0.2)");
-    grad.addColorStop(1, "transparent");
-
-    charts.anomalies = new Chart(ctx, {
+    charts[canvasId] = new Chart(ctx, {
       type: "line",
       data: {
         labels: labels,
         datasets: [
-          {
-            label: "Requests",
-            data: values,
-            borderColor: c.primary,
-            backgroundColor: grad,
-            fill: true,
-            tension: 0.35,
-            borderWidth: 2,
-            pointRadius: 0,
-            pointHoverRadius: 4,
-            order: 2,
-          },
-          {
-            label: "Anomaly",
-            data: anomalyPoints,
-            type: "scatter",
-            borderColor: c.danger,
-            backgroundColor: c.danger,
-            pointRadius: 7,
-            pointHoverRadius: 9,
-            pointStyle: "circle",
-            order: 1,
-          },
+          { label: "High", data: bridge("upper"), borderWidth: 0, pointRadius: 0, pointHoverRadius: 0, backgroundColor: C.accentFill, fill: "+1", tension: 0.3 },
+          { label: "Low", data: bridge("lower"), borderWidth: 0, pointRadius: 0, pointHoverRadius: 0, fill: false, tension: 0.3 },
+          { label: "Forecast", data: bridge("value"), borderColor: C.accent, borderWidth: 2, borderDash: [6, 4], pointRadius: 0, pointHoverRadius: 4, pointHoverBackgroundColor: C.accent, tension: 0.3, fill: false },
+          { label: "Recorded", data: history.map(function (p) { return p.value; }).concat(fc.map(function () { return null; })), borderColor: C.ink, borderWidth: 1.6, pointRadius: 0, pointHoverRadius: 4, pointHoverBackgroundColor: C.ink, tension: 0.25, fill: false },
         ],
       },
-      options: {
-        ...defaultChartOptions(),
-        interaction: { intersect: false, mode: "index" },
-        plugins: {
-          ...defaultChartOptions().plugins,
-          legend: {
-            labels: { color: c.text, font: { family: "'Inter', system-ui, sans-serif", size: 11 }, usePointStyle: true },
-          },
-          tooltip: {
-            backgroundColor: c.dark ? "#1e293b" : "#fff",
-            titleColor: c.text,
-            bodyColor: c.textMuted,
-            borderColor: c.grid,
-            borderWidth: 1,
-            padding: 12,
-            cornerRadius: 8,
-            filter: function (item) { return item.raw !== null; },
-          },
-          logSightEmptyState: { enabled: false },
-        },
-        scales: {
-          x: {
-            grid: { color: c.grid },
-            ticks: { color: c.textMuted, maxRotation: 45, maxTicksLimit: 16 },
-          },
-          y: {
-            beginAtZero: true,
-            grid: { color: c.grid },
-            ticks: { color: c.textMuted },
-          },
-        },
-      },
+      options: options,
+      plugins: [endOfLog],
     });
   }
 
-  // ---------------------------------------------------------------------------
-  // Dataset comparison chart — two overlaid hourly traffic lines
-  // ---------------------------------------------------------------------------
+  /** Requests per hour with flagged hours drawn as ringed points. */
+  function anomalies(canvasId, series, flagged) {
+    destroy(canvasId);
+    var ctx = context(canvasId);
+    if (!ctx) return;
+    var labels = series.map(function (p) { return p.label; });
+    var values = series.map(function (p) { return p.value; });
+    var marks = labels.map(function (label, i) { return flagged[label] ? values[i] : null; });
 
-  function renderComparisonChart(canvasId, labels, valA, valB, nameA, nameB) {
-    destroyChart("compare");
-    const el = document.getElementById(canvasId);
-    if (!el) return;
-    const c   = getThemeColors();
-    const ctx = el.getContext("2d");
+    var options = baseOptions();
+    options.plugins.tooltip.callbacks.afterBody = function (items) {
+      var label = items.length ? items[0].label : "";
+      return flagged[label] ? ["", flagged[label]] : [];
+    };
+    options.plugins.tooltip.filter = function (item) { return item.datasetIndex === 1; };
 
-    charts["compare"] = new Chart(ctx, {
+    charts[canvasId] = new Chart(ctx, {
       type: "line",
       data: {
         labels: labels,
         datasets: [
-          {
-            label: nameA || "Dataset A",
-            data: valA,
-            borderColor: c.primary,
-            backgroundColor: "transparent",
-            tension: 0.35,
-            borderWidth: 2,
-            pointRadius: 0,
-            pointHoverRadius: 4,
-          },
-          {
-            label: nameB || "Dataset B",
-            data: valB,
-            borderColor: c.warn,
-            backgroundColor: "transparent",
-            tension: 0.35,
-            borderWidth: 2,
-            borderDash: [5, 3],
-            pointRadius: 0,
-            pointHoverRadius: 4,
-          },
+          { label: "Flagged", data: marks, showLine: false, pointRadius: 5, pointHoverRadius: 7, pointBackgroundColor: C.paper, pointBorderColor: C.bad, pointBorderWidth: 2, order: 1 },
+          { label: "Requests", data: values, borderColor: C.ink, backgroundColor: C.inkFill, fill: true, borderWidth: 1.4, tension: 0.2, pointRadius: 0, pointHoverRadius: 3, order: 2 },
         ],
       },
-      options: {
-        ...defaultChartOptions(),
-        interaction: { intersect: false, mode: "index" },
-        plugins: {
-          ...defaultChartOptions().plugins,
-          legend: { labels: { color: c.text, font: { family: "'Inter', system-ui, sans-serif", size: 11 }, usePointStyle: true } },
-        },
-        scales: {
-          x: { grid: { color: c.grid }, ticks: { color: c.textMuted, maxTicksLimit: 12 } },
-          y: { beginAtZero: true, grid: { color: c.grid }, ticks: { color: c.textMuted } },
-        },
+      options: options,
+    });
+  }
+
+  /** Two datasets on the same 24-hour axis. */
+  function compare(canvasId, labels, a, b, nameA, nameB) {
+    destroy(canvasId);
+    var ctx = context(canvasId);
+    if (!ctx) return;
+    var options = baseOptions();
+    options.scales.x.ticks.maxTicksLimit = 12;
+    charts[canvasId] = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels: labels,
+        datasets: [
+          { label: nameA, data: a, borderColor: C.ink, borderWidth: 2, tension: 0.3, pointRadius: 0, pointHoverRadius: 4, pointHoverBackgroundColor: C.ink },
+          { label: nameB, data: b, borderColor: C.warn, borderWidth: 2, tension: 0.3, pointRadius: 0, pointHoverRadius: 4, pointHoverBackgroundColor: C.warn },
+        ],
       },
+      options: options,
     });
   }
 
   global.LogSightCharts = {
-    destroyAll: destroyAll,
-    renderRequestFrequency: renderRequestFrequency,
-    renderStatusDoughnut: renderStatusDoughnut,
-    renderTopEndpoints: renderTopEndpoints,
-    renderTrafficArea: renderTrafficArea,
-    renderForecastChart: renderForecastChart,
-    renderAnomalyChart: renderAnomalyChart,
-    renderComparisonChart: renderComparisonChart,
-    getThemeColors: getThemeColors,
+    traffic: traffic,
+    hours: hours,
+    forecast: forecast,
+    anomalies: anomalies,
+    compare: compare,
+    destroy: destroy,
   };
-})(typeof window !== "undefined" ? window : globalThis);
+})(window);

@@ -27,7 +27,10 @@ from django.contrib.auth import get_user_model
 from django.db.models import Q
 from django.utils.dateparse import parse_datetime
 
-from logs.models import LogEntry
+from django.core.cache import cache
+
+from logs.models import Dataset, LogEntry
+from logs.services.scope import RESULT_TTL, entries_for, result_key
 
 User = get_user_model()
 
@@ -104,7 +107,7 @@ def get_log_entries(
     page = max(1, page)
     page_size = min(max(1, page_size), PAGE_SIZE_MAX)
 
-    qs = LogEntry.objects.filter(dataset_id=dataset_id, dataset__owner=owner)
+    qs = entries_for(dataset_id, owner)
 
     # -- Status filter ---------------------------------------------------
     status_kwargs = _STATUS_FILTERS.get(status_filter)
@@ -153,7 +156,25 @@ def get_log_entries(
         qs = qs.filter(status_code__lte=status_max)
 
     # -- Total count (before pagination) ---------------------------------
-    total: int = qs.count()
+    # Counting is the expensive half of every page request.  With no filters
+    # the answer is already stored on the dataset; with filters it is counted
+    # once and remembered, so moving between pages never recounts.
+    filters = (
+        status_filter if status_kwargs else "", search, date_from, date_to,
+        ip_address, method, endpoint, status_min, status_max,
+    )
+    if not any(f not in ("", None) for f in filters):
+        total = (
+            Dataset.objects.filter(pk=dataset_id, owner_id=getattr(owner, "pk", owner))
+            .values_list("total_entries", flat=True)
+            .first()
+        ) or 0
+    else:
+        count_key = result_key("entry-count", dataset_id, *filters)
+        total = cache.get(count_key)
+        if total is None:
+            total = qs.count()
+            cache.set(count_key, total, RESULT_TTL)
     total_pages: int = max(1, (total + page_size - 1) // page_size)
     # Clamp page to a valid range after applying filters.
     page = min(page, total_pages)

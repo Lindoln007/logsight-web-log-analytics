@@ -20,12 +20,13 @@ from typing import Any
 
 from django.core.cache import cache
 from django.db.models import Avg, Count, Max, Min, Q, Sum
-from django.db.models.functions import ExtractHour, TruncDay, TruncHour
 from django.utils.dateparse import parse_datetime
 
 from django.contrib.auth import get_user_model
 
 from logs.models import AnalyticsSummary, Dataset, LogEntry
+from logs.services import rollup
+from logs.services.scope import RESULT_TTL, bump_version, cached_result, entries_for
 
 User = get_user_model()
 
@@ -35,8 +36,9 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-#: How long computed analytics are held in the cache (seconds).
-ANALYTICS_CACHE_TTL: int = 60 * 15  # 15 minutes
+#: How long computed analytics are held in the cache (seconds).  A dataset does
+#: not change after parsing, so results stay valid until they are invalidated.
+ANALYTICS_CACHE_TTL: int = RESULT_TTL
 
 #: Default and maximum numbers of top endpoints returned.
 DEFAULT_TOP_ENDPOINTS_LIMIT: int = 10
@@ -95,8 +97,7 @@ def get_summary_metrics(dataset_id: int, owner: User) -> dict[str, Any]:
         return cached
 
     agg = (
-        LogEntry.objects
-        .filter(dataset_id=dataset_id, dataset__owner=owner)
+        entries_for(dataset_id, owner)
         .aggregate(
             total_requests=Count("id"),
             total_errors=Count("id", filter=Q(error_flag=True)),
@@ -160,7 +161,7 @@ def get_status_distribution(
         if cached is not None:
             return cached
 
-    qs = LogEntry.objects.filter(dataset_id=dataset_id, dataset__owner=owner)
+    qs = entries_for(dataset_id, owner)
     if date_from is not None:
         qs = qs.filter(timestamp__gte=date_from)
     if date_to is not None:
@@ -225,48 +226,29 @@ def get_request_trends(
         interval = "hour"
     limit = max(1, min(limit, 1000))
 
-    use_cache = date_from is None and date_to is None
-    if use_cache:
-        cache_key = _CK_TRENDS.format(dataset_id=dataset_id, interval=interval)
-        cached = cache.get(cache_key)
-        if cached is not None:
-            return cached
-
-    trunc_fn = TruncHour if interval == "hour" else TruncDay
-
-    qs = LogEntry.objects.filter(dataset_id=dataset_id, dataset__owner=owner)
-    if date_from is not None:
-        qs = qs.filter(timestamp__gte=date_from)
-    if date_to is not None:
-        qs = qs.filter(timestamp__lte=date_to)
-
-    qs = (
-        qs.annotate(bucket=trunc_fn("timestamp"))
-        .values("bucket")
-        .annotate(count=Count("id"))
-        .order_by("-bucket")[:limit]
-    )
-
-    rows = sorted(qs, key=lambda r: r["bucket"] or "")
+    # Served from the hourly roll-up (one small row per hour), so there is
+    # nothing worth caching and no raw rows are grouped here.
+    hours = rollup.hourly_rows(dataset_id, owner, date_from, date_to)
+    if interval == "hour":
+        buckets = [(row["hour"], row["total"]) for row in hours]
+    else:
+        per_day: dict = {}
+        for row in hours:
+            day = row["hour"].replace(hour=0)
+            per_day[day] = per_day.get(day, 0) + row["total"]
+        buckets = sorted(per_day.items())
 
     data = [
-        {
-            "timestamp": row["bucket"].isoformat(),
-            "count": row["count"],
-        }
-        for row in rows
-        if row["bucket"] is not None
+        {"timestamp": bucket.isoformat(), "count": count}
+        for bucket, count in buckets[-limit:]
     ]
 
-    result: dict[str, Any] = {
+    return {
         "dataset_id": dataset_id,
         "interval": interval,
         "total_buckets": len(data),
         "data": data,
     }
-    if use_cache:
-        cache.set(cache_key, result, ANALYTICS_CACHE_TTL)
-    return result
 
 
 def get_top_endpoints(
@@ -301,12 +283,14 @@ def get_top_endpoints(
 
     use_cache = date_from is None and date_to is None
     if use_cache:
-        cache_key = _CK_ENDPOINTS.format(dataset_id=dataset_id, limit=limit)
+        # One cached list of the top MAX endpoints serves every smaller limit.
+        cache_key = _CK_ENDPOINTS.format(dataset_id=dataset_id, limit="all")
         cached = cache.get(cache_key)
         if cached is not None:
-            return cached
+            return {**cached, "endpoints": cached["endpoints"][:limit]}
+    fetch_limit = MAX_TOP_ENDPOINTS_LIMIT if use_cache else limit
 
-    base_qs = LogEntry.objects.filter(dataset_id=dataset_id, dataset__owner=owner)
+    base_qs = entries_for(dataset_id, owner)
     if date_from is not None:
         base_qs = base_qs.filter(timestamp__gte=date_from)
     if date_to is not None:
@@ -319,7 +303,7 @@ def get_top_endpoints(
     total: int = agg["total"] or 0
     unique_endpoint_count: int = agg["unique_endpoints"] or 0
 
-    qs = base_qs.values("endpoint").annotate(count=Count("id")).order_by("-count")[:limit]
+    qs = base_qs.values("endpoint").annotate(count=Count("id")).order_by("-count")[:fetch_limit]
 
     endpoints = [
         {
@@ -337,6 +321,7 @@ def get_top_endpoints(
     }
     if use_cache:
         cache.set(cache_key, result, ANALYTICS_CACHE_TTL)
+        return {**result, "endpoints": endpoints[:limit]}
     return result
 
 
@@ -369,23 +354,9 @@ def get_hourly_traffic(dataset_id: int, owner: User, date_from=None, date_to=Non
         if cached is not None:
             return cached
 
-    qs = LogEntry.objects.filter(dataset_id=dataset_id, dataset__owner=owner)
-    if date_from is not None:
-        qs = qs.filter(timestamp__gte=date_from)
-    if date_to is not None:
-        qs = qs.filter(timestamp__lte=date_to)
-
-    qs = (
-        qs.annotate(hour=ExtractHour("timestamp"))
-        .values("hour")
-        .annotate(count=Count("id"))
-        .order_by("hour")
-    )
-
     hour_map: dict[int, int] = {h: 0 for h in range(24)}
-    for row in qs:
-        if row["hour"] is not None:
-            hour_map[int(row["hour"])] = row["count"]
+    for row in rollup.hourly_rows(dataset_id, owner, date_from, date_to):
+        hour_map[row["hour"].hour] += row["total"]
 
     traffic = [{"hour": h, "count": hour_map[h]} for h in range(24)]
 
@@ -424,28 +395,22 @@ def get_method_distribution(dataset_id: int, owner: User) -> dict[str, Any]:
     if cached is not None:
         return cached
 
-    total_agg = (
-        LogEntry.objects
-        .filter(dataset_id=dataset_id, dataset__owner=owner)
-        .aggregate(total=Count("id"))
-    )
-    total: int = total_agg["total"] or 0
-
     qs = (
-        LogEntry.objects
-        .filter(dataset_id=dataset_id, dataset__owner=owner)
+        entries_for(dataset_id, owner)
         .values("method")
         .annotate(count=Count("id"))
         .order_by("-count")
     )
 
+    rows = list(qs)
+    total: int = sum(row["count"] for row in rows)
     methods = [
         {
             "method": row["method"],
             "count": row["count"],
             "percentage": round(row["count"] / total * 100, 2) if total > 0 else 0.0,
         }
-        for row in qs
+        for row in rows
     ]
 
     result: dict[str, Any] = {
@@ -485,7 +450,7 @@ def get_error_breakdown(dataset_id: int, owner: User) -> dict[str, Any]:
     if cached is not None:
         return cached
 
-    error_qs = LogEntry.objects.filter(dataset_id=dataset_id, dataset__owner=owner, error_flag=True)
+    error_qs = entries_for(dataset_id, owner).filter(error_flag=True)
 
     counts = error_qs.aggregate(
         total_errors=Count("id"),
@@ -555,6 +520,7 @@ def get_analytics_overview(
 # ---------------------------------------------------------------------------
 
 
+@cached_result("filtered-summary")
 def get_filtered_summary(
     dataset_id: int,
     owner: User,
@@ -584,7 +550,7 @@ def get_filtered_summary(
             "date_range": {"start": "ISO8601" | None, "end": "ISO8601" | None},
         }
     """
-    qs = LogEntry.objects.filter(dataset_id=dataset_id, dataset__owner=owner)
+    qs = entries_for(dataset_id, owner)
 
     if date_from is not None:
         qs = qs.filter(timestamp__gte=date_from)
@@ -645,6 +611,7 @@ def compute_and_persist_analytics(dataset_id: int) -> AnalyticsSummary:
     endpoints_data = get_top_endpoints(dataset_id, owner_obj, limit=20)
     hourly_data = get_hourly_traffic(dataset_id, owner_obj)
     method_data = get_method_distribution(dataset_id, owner_obj)
+    get_error_breakdown(dataset_id, owner_obj)   # primes the cache for the overview page
 
     # Reshape into the JSON structures that AnalyticsSummary stores.
     status_dist: dict[str, int] = {
@@ -710,12 +677,12 @@ def invalidate_analytics_cache(dataset_id: int) -> None:
         _CK_METHODS.format(dataset_id=dataset_id),
         _CK_ERRORS.format(dataset_id=dataset_id),
     ]
-    for interval in ("hour", "day"):
-        keys.append(_CK_TRENDS.format(dataset_id=dataset_id, interval=interval))
-    for lim in (5, 10, 20, 50, 100):
-        keys.append(_CK_ENDPOINTS.format(dataset_id=dataset_id, limit=lim))
+    keys.append(_CK_ENDPOINTS.format(dataset_id=dataset_id, limit="all"))
 
     cache.delete_many(keys)
+    # Retire everything stored through scope.cached_result as well
+    # (anomalies, forecasts, security report, entry counts).
+    bump_version(dataset_id)
     logger.debug("Invalidated analytics cache for dataset_id=%s (%d keys)", dataset_id, len(keys))
 
 

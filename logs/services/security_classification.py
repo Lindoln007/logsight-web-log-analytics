@@ -29,6 +29,8 @@ from logs.ml.security_model import (
     normalise_request,
 )
 
+from logs.services.scope import RESULT_TTL, entries_for
+
 logger = logging.getLogger(__name__)
 
 # A request is only reported as an attack when the model is at least this sure.
@@ -38,7 +40,7 @@ MAX_DISTINCT_URLS = 200_000      # safety cap on how many URLs are scored
 MAX_URLS_FOR_IP_LOOKUP = 2_000   # flagged URLs traced back to client addresses
 EXAMPLES_PER_CLASS = 10
 TOP_IPS_PER_CLASS = 10
-CACHE_TTL = 15 * 60
+CACHE_TTL = RESULT_TTL
 
 
 def classify_dataset(dataset_id: int, owner) -> dict[str, Any]:
@@ -90,7 +92,7 @@ def classify_dataset(dataset_id: int, owner) -> dict[str, Any]:
     if cached is not None:
         return cached
 
-    base_qs = LogEntry.objects.filter(dataset_id=dataset_id, dataset__owner=owner)
+    base_qs = entries_for(dataset_id, owner)
 
     url_rows = list(
         base_qs.values("endpoint")

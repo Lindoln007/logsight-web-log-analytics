@@ -26,6 +26,7 @@ from typing import Iterator, Optional
 from django.db import connection, transaction
 
 from logs.models import Dataset, LogEntry
+from logs.services.rollup import HourBuckets
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +131,10 @@ class LogParsingService:
             parse_row = self._parse_row
             batch_size = self.batch_size
             total_lines = 0
+            # Per-hour figures are tallied as lines go by, so the time-based
+            # pages never have to group the stored rows by hour afterwards.
+            buckets = HourBuckets()
+            add_to_bucket = buckets.add
 
             with self._open_log_file(source_path) as log_file:
                 for raw_line in log_file:
@@ -140,6 +145,7 @@ class LogParsingService:
                     if row is None:
                         continue
                     append_row(row)
+                    add_to_bucket(row[0], row[1], row[9], row[6])
 
                     if len(pending_rows) >= batch_size:
                         stats.inserted_entries += self._insert_rows(dataset, pending_rows)
@@ -165,8 +171,16 @@ class LogParsingService:
                 )
 
             dataset.total_entries = stats.inserted_entries
+            dataset.save(update_fields=["total_entries"])
+            try:
+                with transaction.atomic():
+                    buckets.save(dataset)
+            except Exception:
+                # The roll-up can always be rebuilt from the stored entries.
+                logger.exception("Could not store hourly roll-up for dataset_id=%s", dataset.pk)
+
             dataset.status = Dataset.STATUS_COMPLETED
-            dataset.save(update_fields=["total_entries", "status"])
+            dataset.save(update_fields=["status"])
 
             logger.info(
                 "Completed log parsing for dataset_id=%s total=%s parsed=%s skipped=%s inserted=%s",

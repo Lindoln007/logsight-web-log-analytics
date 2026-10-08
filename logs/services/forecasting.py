@@ -31,8 +31,9 @@ import math
 from datetime import datetime, timedelta, timezone as dt_timezone
 
 from django.core.cache import cache
-from django.db.models import Count
-from django.db.models.functions import TruncHour
+
+from logs.services import rollup
+from logs.services.scope import cached_result
 
 logger = logging.getLogger(__name__)
 
@@ -58,14 +59,14 @@ ML_TREES = 100
 
 # Back-test window: hide the last 20 % of the history (bounded to 6 h – 7 days).
 MIN_HOURS_FOR_EVALUATION = 24
-EVALUATION_CACHE_TTL = 15 * 60
-HOURLY_CACHE_TTL = 15 * 60
+EVALUATION_CACHE_TTL = 60 * 60 * 24
 
 
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
+@cached_result("forecast")
 def get_traffic_forecast(
     dataset_id: int,
     owner,
@@ -169,40 +170,15 @@ def _hourly_series(dataset_id: int, owner) -> tuple[list[datetime], list[int]]:
     Return a *continuous* hourly series (timestamps, request counts) covering
     the most recent ``MAX_HISTORY_HOURS`` of the dataset.
 
-    Hours with no requests are absent from the GROUP BY result; they are filled
-    with zero here so that "the value 24 hours ago" always means exactly that.
+    The roll-up only holds hours that had requests; the gaps are filled with
+    zero here so that "the value 24 hours ago" always means exactly that.
     """
-    from logs.models import Dataset, LogEntry  # local import avoids circular deps
-
-    # total_entries changes whenever rows are added, which retires the old key.
-    total_entries = (
-        Dataset.objects.filter(pk=dataset_id, owner=owner)
-        .values_list("total_entries", flat=True)
-        .first()
-    )
-    if total_entries is None:
-        return [], []
-    cache_key = f"forecast:hourly:{dataset_id}:{total_entries}"
-    cached = cache.get(cache_key)
-    if cached is not None:
-        return cached
-
-    rows = list(
-        LogEntry.objects
-        .filter(dataset_id=dataset_id, dataset__owner=owner)
-        .annotate(hour=TruncHour("timestamp"))
-        .values("hour")
-        .annotate(count=Count("id"))
-        .order_by("-hour")[:MAX_HISTORY_HOURS]
-    )
     counts: dict[datetime, int] = {}
-    for row in rows:
+    for row in rollup.hourly_rows(dataset_id, owner)[-MAX_HISTORY_HOURS:]:
         hour = row["hour"]
-        if hour is None:
-            continue
         if hour.tzinfo is None:
             hour = hour.replace(tzinfo=dt_timezone.utc)
-        counts[hour] = row["count"]
+        counts[hour] = row["total"]
 
     if not counts:
         return [], []
@@ -213,7 +189,6 @@ def _hourly_series(dataset_id: int, owner) -> tuple[list[datetime], list[int]]:
 
     timestamps = [first + timedelta(hours=i) for i in range(total_hours)]
     values = [counts.get(ts, 0) for ts in timestamps]
-    cache.set(cache_key, (timestamps, values), HOURLY_CACHE_TTL)
     return timestamps, values
 
 

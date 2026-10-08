@@ -140,6 +140,10 @@ def _process_dataset_in_background(*, dataset_id: int, batch_size: int) -> None:
                 dataset_id,
             )
 
+        # The dataset is usable from here on.  Run the three analyses once now
+        # so their pages open instantly instead of computing on first visit.
+        _prewarm(dataset_id)
+
     except Exception:
         logger.exception("Background processing failed for dataset_id=%s", dataset_id)
         # Guard: transition to FAILED if parse_dataset_log() did not already
@@ -151,6 +155,28 @@ def _process_dataset_in_background(*, dataset_id: int, batch_size: int) -> None:
             _db_connection.close()
         except Exception:
             pass
+
+
+def _prewarm(dataset_id: int) -> None:
+    """Compute and cache the default anomaly, forecast and security results."""
+    from logs.services.anomaly_detection import get_anomalies
+    from logs.services.forecasting import get_traffic_forecast
+    from logs.services.security import get_security_insights
+
+    try:
+        owner = Dataset.objects.select_related("owner").get(pk=dataset_id).owner
+    except Dataset.DoesNotExist:
+        return
+    steps = (
+        ("anomalies", lambda: get_anomalies(dataset_id, owner, sensitivity="medium", method="isolation_forest")),
+        ("forecast", lambda: get_traffic_forecast(dataset_id, owner, periods=24, method="ml")),
+        ("security", lambda: get_security_insights(dataset_id, owner)),
+    )
+    for name, step in steps:
+        try:
+            step()
+        except Exception:
+            logger.exception("Pre-computing %s failed for dataset_id=%s", name, dataset_id)
 
 
 def _ensure_dataset_not_stuck(dataset_id: int) -> None:

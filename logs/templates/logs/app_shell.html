@@ -1,1078 +1,579 @@
 <!DOCTYPE html>
-<html lang="en" class="h-full">
+<html lang="en">
   <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="LogSight — web-based log analytics and visualization interface" />
-    <meta id="theme-color-meta" name="theme-color" content="#eef2f5" />
-    <title>LogSight — Log Analytics</title>
-    <link rel="icon" type="image/png" href="assets/logsight-logo.png?v=20260330c" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-    <script src="https://cdn.tailwindcss.com"></script>
+    {% include "logs/_head.html" %}
+    <meta name="description" content="LogSight — web-based log analytics" />
+    <title>LogSight</title>
     <script>
-      tailwind.config = {
-        darkMode: "class",
-        theme: {
-          extend: {
-            fontFamily: { sans: ["Inter", "system-ui", "sans-serif"] },
-            boxShadow: {
-              card: "0 1px 3px 0 rgb(0 0 0 / 0.06), 0 1px 2px -1px rgb(0 0 0 / 0.06)",
-              "card-hover": "0 10px 40px -10px rgb(15 23 42 / 0.15)",
-            },
-          },
-        },
-      };
+      window.LOGSIGHT_USER_ROLE = "{{ user_role }}";
+      window.LOGSIGHT_MESSAGES = [{% for message in messages %}{ text: "{{ message|escapejs }}", level: "{{ message.level_tag|escapejs }}" }{% if not forloop.last %},{% endif %}{% endfor %}];
     </script>
-    <link rel="stylesheet" href="css/styles.css?v=20260528-v2" />
-    <script>window.LOGSIGHT_USER_ROLE = "{{ user_role }}";</script>
   </head>
-  <body class="h-full min-h-screen bg-slate-50 text-slate-900 antialiased">
-    {% if messages %}
-      <div class="fixed right-4 top-4 z-50 w-full max-w-sm space-y-2">
-        {% for message in messages %}
-          <div class="rounded-2xl border border-emerald-200 bg-white/95 px-4 py-3 text-sm text-slate-700 shadow-lg backdrop-blur">
-            {{ message }}
+  <body>
+    {% include "logs/_icons.html" %}
+    <a class="skip-link" href="#content">Skip to content</a>
+    <div class="route-progress" id="route-progress" aria-hidden="true"></div>
+
+    <div class="shell" id="shell">
+      <!-- ================================================================ -->
+      <!-- Sidebar: brand, working dataset, navigation, account              -->
+      <!-- ================================================================ -->
+      <aside class="sidebar" id="sidebar" aria-label="Primary">
+        <a class="brand" href="#/overview" data-route="overview" aria-label="LogSight overview">
+          <span class="brand-name">Log<i>Sight</i></span>
+        </a>
+
+        <div class="ds-switch">
+          <span class="ds-switch-label" id="ds-switch-label">Working dataset</span>
+          <button type="button" class="ds-button is-empty" id="ds-button" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="ds-switch-label ds-name">
+            <span>
+              <span class="ds-name truncate" id="ds-name">Loading…</span>
+              <span class="ds-meta truncate" id="ds-meta">&nbsp;</span>
+            </span>
+            <svg class="icon icon-sm"><use href="#i-chevron-down" /></svg>
+          </button>
+          <div class="popover ds-popover" id="ds-popover" hidden>
+            <div class="popover-body" id="ds-list" role="listbox" aria-labelledby="ds-switch-label"></div>
+            <div class="popover-foot"><a href="#/datasets" data-route="datasets">Manage datasets</a></div>
           </div>
-        {% endfor %}
-      </div>
-    {% endif %}
-    <div class="min-h-screen">
-      <header class="app-topbar">
-        <div class="app-topbar-inner">
-          <a href="#/dashboard" data-route="dashboard" class="app-brand" aria-label="LogSight dashboard">
-            <span class="brand-mark-shell shrink-0" aria-hidden="true">
-              <img src="assets/logsight-logo.png?v=20260330c" alt="" class="brand-mark-image" />
-            </span>
-            <span class="brand-title">
-              <span class="brand-title-primary">Log</span><span class="brand-title-secondary">Sight</span>
-            </span>
-          </a>
+        </div>
 
-          <nav class="top-nav" aria-label="Main workflow">
-            <span id="nav-hover-bubble" aria-hidden="true"></span>
-            <a href="#/dashboard" data-route="dashboard" data-nav-item class="top-nav-link">Dashboard</a>
-            <div class="top-nav-group" data-nav-item data-nav-section="data">
-              <button type="button" class="top-nav-link" aria-haspopup="true">Data</button>
-              <div class="nav-dropdown">
-                <a href="#/upload" data-route="upload">Upload Logs<span>Import Apache or Nginx files</span></a>
-                <a href="#/datasets" data-route="datasets">Datasets<span>Review processing status</span></a>
-                <a href="#/viewer" data-route="viewer">Log Viewer<span>Search, filter, and inspect rows</span></a>
-              </div>
-            </div>
-            <div class="top-nav-group" data-nav-item data-nav-section="analytics">
-              <button type="button" class="top-nav-link" aria-haspopup="true">Analytics</button>
-              <div class="nav-dropdown">
-                <a href="#/forecast" data-route="forecast">Forecasting<span>Predict traffic and load</span></a>
-                <a href="#/anomalies" data-route="anomalies">Anomalies<span>Detect unusual behavior</span></a>
-                <a href="#/compare" data-route="compare">Compare Datasets<span>Side-by-side dataset analysis</span></a>
-                <a href="#/search" data-route="search">Advanced Search<span>Filter and query log entries</span></a>
-                <a href="#/reports" data-route="reports">Reports<span>Export operational summaries</span></a>
-              </div>
-            </div>
-            <div class="top-nav-group" data-nav-item data-nav-section="monitoring">
-              <button type="button" class="top-nav-link" aria-haspopup="true">Monitoring</button>
-              <div class="nav-dropdown">
-                <a href="{% url 'coming-soon' %}?module=alerts" data-coming-soon="alerts">Alerts<span>Health checks and thresholds</span></a>
-                <a href="#/security" data-route="security">Security Insights<span>Attack detection and risky IPs</span></a>
-                <a href="{% url 'coming-soon' %}?module=live-ingestion" data-coming-soon="live-ingestion">Live Ingestion<span>Simulate real-time log data</span></a>
-              </div>
-            </div>
-            <div id="nav-admin-group" class="top-nav-group hidden" data-nav-item data-nav-section="admin">
-              <button type="button" class="top-nav-link" aria-haspopup="true">Admin</button>
-              <div class="nav-dropdown nav-dropdown--compact">
-                <a href="{% url 'coming-soon' %}?module=user-management" data-coming-soon="user-management">User Management<span>Roles and access control</span></a>
-              </div>
-            </div>
-          </nav>
+        <nav class="nav" id="nav" aria-label="Sections">
+          <span class="nav-marker" id="nav-marker" aria-hidden="true"></span>
+          <div>
+            <a class="nav-link" href="#/overview" data-route="overview"><svg class="icon"><use href="#i-overview" /></svg>Overview</a>
+            <a class="nav-link" href="#/datasets" data-route="datasets"><svg class="icon"><use href="#i-datasets" /></svg>Datasets<span class="nav-count" id="nav-datasets-count"></span></a>
+            <a class="nav-link" href="#/explore" data-route="explore"><svg class="icon"><use href="#i-explore" /></svg>Explore</a>
+          </div>
+          <div>
+            <p class="nav-group-title">Analyse</p>
+            <a class="nav-link" href="#/forecast" data-route="forecast"><svg class="icon"><use href="#i-forecast" /></svg>Forecast</a>
+            <a class="nav-link" href="#/anomalies" data-route="anomalies"><svg class="icon"><use href="#i-anomalies" /></svg>Anomalies</a>
+            <a class="nav-link" href="#/security" data-route="security"><svg class="icon"><use href="#i-security" /></svg>Security</a>
+            <a class="nav-link" href="#/compare" data-route="compare"><svg class="icon"><use href="#i-compare" /></svg>Compare</a>
+          </div>
+          <div>
+            <p class="nav-group-title">Share</p>
+            <a class="nav-link" href="#/reports" data-route="reports"><svg class="icon"><use href="#i-reports" /></svg>Reports</a>
+          </div>
+        </nav>
 
-          <div class="topbar-actions">
-            <label class="global-search">
-              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35m1.1-5.15a6.25 6.25 0 11-12.5 0 6.25 6.25 0 0112.5 0z" /></svg>
-              <input type="search" placeholder="Search logs, datasets..." />
-            </label>
-            <!-- Notification bell -->
-            <button type="button" id="notif-bell" class="notif-bell" aria-label="Notifications">
-              <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>
-              <span id="notif-badge" class="notif-badge hidden">0</span>
-            </button>
-            <!-- Notification dropdown -->
-            <div id="notif-dropdown" class="notif-dropdown hidden">
-              <div class="notif-dropdown-header">
-                <span class="text-sm font-semibold text-slate-800 dark:text-slate-200">Notifications</span>
-                <div class="flex items-center gap-3">
-                  <button type="button" id="notif-mark-all" class="text-xs text-indigo-600 hover:underline dark:text-indigo-400">Mark all read</button>
-                  <button type="button" id="notif-delete-all" class="text-xs text-red-500 hover:underline dark:text-red-400">Delete all</button>
-                </div>
-              </div>
-              <div id="notif-list" class="notif-list">
-                <p class="px-4 py-6 text-center text-xs text-slate-400">No notifications yet.</p>
-              </div>
-            </div>
-            <a href="{% url 'accounts:profile' %}" class="profile-chip">{{ request.user.username }}</a>
-            <form method="post" action="{% url 'accounts:logout' %}" class="inline-flex">
+        <div class="sidebar-foot">
+          <div class="account">
+            <span class="avatar" aria-hidden="true">{{ request.user.username|slice:":1"|upper }}</span>
+            <span>
+              <a class="account-name truncate" href="{% url 'accounts:profile' %}">{{ request.user.get_full_name|default:request.user.username }}</a>
+              <span class="account-role">{{ user_role }}</span>
+            </span>
+            <form method="post" action="{% url 'accounts:logout' %}">
               {% csrf_token %}
-              <button type="submit" class="logout-button">Logout</button>
+              <button type="submit" class="icon-btn" aria-label="Sign out" title="Sign out"><svg class="icon"><use href="#i-logout" /></svg></button>
             </form>
-            <button type="button" id="mobile-nav-toggle" class="mobile-nav-toggle" aria-label="Open navigation">
-              <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h16M4 12h16M4 17h16" /></svg>
-            </button>
           </div>
         </div>
+      </aside>
+      <div class="scrim" id="scrim"></div>
 
-        <div id="mobile-nav-panel" class="mobile-nav-panel">
-          <a href="#/dashboard" data-route="dashboard">Dashboard</a>
-          <p>Data</p>
-          <a href="#/upload" data-route="upload">Upload Logs</a>
-          <a href="#/datasets" data-route="datasets">Datasets</a>
-          <a href="#/viewer" data-route="viewer">Log Viewer</a>
-          <p>Analytics</p>
-          <a href="#/forecast" data-route="forecast">Forecasting</a>
-          <a href="#/anomalies" data-route="anomalies">Anomalies</a>
-          <a href="#/compare" data-route="compare">Compare Datasets</a>
-          <a href="#/search" data-route="search">Advanced Search</a>
-          <a href="#/reports" data-route="reports">Reports</a>
-          <p>Monitoring</p>
-          <a href="{% url 'coming-soon' %}?module=alerts" data-coming-soon="alerts">Alerts</a>
-          <a href="#/security" data-route="security">Security Insights</a>
-          <a href="{% url 'coming-soon' %}?module=live-ingestion" data-coming-soon="live-ingestion">Live Ingestion</a>
-          <p id="mobile-admin-label" class="hidden">Admin</p>
-          <a id="mobile-admin-users" href="{% url 'coming-soon' %}?module=user-management" data-coming-soon="user-management" class="hidden">User Management</a>
-        </div>
-      </header>
-
-      <div id="main-shell" class="flex min-h-screen flex-col">
-        <section class="context-toolbar">
-          <div class="flex flex-wrap items-center gap-3">
-            <h1 id="page-title">Dashboard</h1>
-            <span id="stat-period" class="hidden">Last 24 hours</span>
-          </div>
-        </section>
-
-        <main class="app-content flex-1">
-
-          <!-- ============================================================ -->
-          <!-- Dashboard                                                     -->
-          <!-- ============================================================ -->
-          <section data-view="dashboard" class="space-y-6">
-            <!-- Dataset selector + controls -->
-            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div class="flex min-w-0 flex-1 flex-wrap items-center gap-3">
-                <label for="dashboard-dataset" class="shrink-0 text-sm font-medium text-slate-700 dark:text-slate-300">Dataset</label>
-                <select
-                  id="dashboard-dataset"
-                  class="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 sm:max-w-xs"
-                >
-                  <option value="">Loading datasets…</option>
-                </select>
-                <!-- Date range filter -->
-                <div id="dashboard-date-filter" class="hidden items-center flex-wrap gap-2">
-                  <span class="text-xs text-slate-400">From</span>
-                  <input id="dash-date-from" type="date" class="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
-                  <span class="text-xs text-slate-400">To</span>
-                  <input id="dash-date-to" type="date" class="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
-                  <span id="dash-date-hint" class="text-xs text-slate-400 italic"></span>
-                  <button type="button" id="dash-date-clear" class="rounded-lg px-2 py-1.5 text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400">✕ Clear</button>
+      <!-- ================================================================ -->
+      <!-- Main column                                                       -->
+      <!-- ================================================================ -->
+      <div class="main">
+        <header class="topbar">
+          <button type="button" class="icon-btn menu-btn" id="menu-btn" aria-label="Open navigation" aria-controls="sidebar" aria-expanded="false"><svg class="icon"><use href="#i-menu" /></svg></button>
+          <p class="crumbs" aria-live="polite">
+            <span id="crumb-section">Overview</span><span class="sep" id="crumb-sep" aria-hidden="true">/</span><b id="crumb-page"></b>
+          </p>
+          <div class="topbar-tools">
+            <form class="search-field" id="global-search-form" role="search">
+              <svg class="icon icon-sm"><use href="#i-search" /></svg>
+              <label class="sr-only" for="global-search">Search log entries in the working dataset</label>
+              <input type="search" id="global-search" placeholder="Search requests, paths, IPs" autocomplete="off" />
+              <span class="kbd" aria-hidden="true">/</span>
+            </form>
+            <div class="notif-wrap">
+              <button type="button" class="icon-btn" id="notif-btn" aria-label="Notifications" aria-haspopup="true" aria-expanded="false">
+                <svg class="icon"><use href="#i-bell" /></svg>
+                <span class="badge-dot" id="notif-badge" hidden>0</span>
+              </button>
+              <div class="popover popover-right notif-popover" id="notif-popover" hidden>
+                <div class="popover-head">
+                  <span class="popover-title">Notifications</span>
+                  <span>
+                    <button type="button" class="btn btn-quiet btn-sm" id="notif-read-all">Mark all read</button>
+                    <button type="button" class="btn btn-quiet btn-sm" id="notif-clear">Clear</button>
+                  </span>
                 </div>
-                <button type="button" id="dash-date-toggle" class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
-                  <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-                  Filter by date
-                  <span id="dash-filter-active" class="hidden ml-0.5 h-1.5 w-1.5 rounded-full bg-indigo-500"></span>
-                </button>
-              </div>
-              <div class="flex items-center gap-2">
-                <button
-                  type="button"
-                  id="dashboard-customize-btn"
-                  class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
-                  title="Customize dashboard widgets"
-                >
-                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" /></svg>
-                  <span class="hidden sm:inline">Customize</span>
-                </button>
-                <button
-                  type="button"
-                  id="dashboard-refresh"
-                  class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
-                  title="Re-compute analytics for the selected dataset"
-                >
-                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                  Refresh
-                </button>
+                <div class="popover-body" id="notif-list"></div>
               </div>
             </div>
+          </div>
+        </header>
 
-            <!-- Customize panel (hidden by default) -->
-            <div id="dashboard-customize-panel" class="hidden rounded-2xl border border-indigo-200 bg-indigo-50/50 p-4 dark:border-indigo-900/40 dark:bg-indigo-950/20">
-              <div class="mb-3 flex items-center justify-between">
-                <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Customize Widgets</h3>
-                <button id="dashboard-customize-save" type="button" class="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-indigo-500">Save</button>
-              </div>
-              <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                <label class="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900">
-                  <input type="checkbox" class="widget-toggle rounded" data-widget="stat-requests" checked /> Total Requests
-                </label>
-                <label class="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900">
-                  <input type="checkbox" class="widget-toggle rounded" data-widget="stat-errors" checked /> Error Rate
-                </label>
-                <label class="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900">
-                  <input type="checkbox" class="widget-toggle rounded" data-widget="stat-latency" checked /> Avg. Response Size
-                </label>
-                <label class="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900">
-                  <input type="checkbox" class="widget-toggle rounded" data-widget="stat-visitors" checked /> Unique Visitors
-                </label>
-                <label class="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900">
-                  <input type="checkbox" class="widget-toggle rounded" data-widget="chart-requests" checked /> Request Frequency
-                </label>
-                <label class="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900">
-                  <input type="checkbox" class="widget-toggle rounded" data-widget="chart-status" checked /> Status Distribution
-                </label>
-                <label class="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900">
-                  <input type="checkbox" class="widget-toggle rounded" data-widget="chart-endpoints" checked /> Top Endpoints
-                </label>
-                <label class="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900">
-                  <input type="checkbox" class="widget-toggle rounded" data-widget="chart-traffic" checked /> Traffic Patterns
-                </label>
+        <main class="page" id="content" tabindex="-1">
+
+          <!-- Shown instead of an analysis view when no dataset is open -->
+          <section class="view" id="no-dataset" hidden>
+            <div class="empty">
+              <p class="empty-mark" aria-hidden="true">No. 0</p>
+              <h1 class="empty-title">Open a dataset to begin</h1>
+              <p class="empty-text">Every page in LogSight reads from one working dataset. Upload an Apache or Nginx access log, or choose one you have already uploaded, and the analysis fills in from there.</p>
+              <div class="empty-actions">
+                <a class="btn btn-primary" href="#/datasets" data-route="datasets"><svg class="icon"><use href="#i-upload" /></svg>Go to datasets</a>
               </div>
             </div>
+          </section>
 
-            <!-- Stat tiles -->
-            <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-              <article id="widget-stat-requests" class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60 dark:shadow-none">
-                <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Total requests</p>
-                <p id="stat-requests" class="mt-2 text-2xl font-bold tracking-tight text-slate-900 dark:text-white">—</p>
-                <p id="stat-requests-sub" class="mt-1 text-xs text-slate-500 dark:text-slate-400">Select a dataset above</p>
-              </article>
-              <article id="widget-stat-errors" class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60 dark:shadow-none">
-                <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Error rate</p>
-                <p id="stat-errors" class="mt-2 text-2xl font-bold tracking-tight text-slate-900 dark:text-white">—</p>
-                <p id="stat-errors-sub" class="mt-1 text-xs text-slate-500 dark:text-slate-400"><span id="stat-errors-abs">—</span> total errors</p>
-              </article>
-              <article id="widget-stat-latency" class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60 dark:shadow-none">
-                <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Avg. response size</p>
-                <p id="stat-latency" class="mt-2 text-2xl font-bold tracking-tight text-slate-900 dark:text-white">—</p>
-                <p id="stat-latency-sub" class="mt-1 text-xs text-slate-500 dark:text-slate-400">Bytes per response</p>
-              </article>
-              <article id="widget-stat-visitors" class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60 dark:shadow-none">
-                <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Unique visitors</p>
-                <p id="stat-visitors" class="mt-2 text-2xl font-bold tracking-tight text-slate-900 dark:text-white">—</p>
-                <p id="stat-visitors-sub" class="mt-1 text-xs text-slate-500 dark:text-slate-400">Distinct IP addresses</p>
-              </article>
-            </div>
-
-            <!-- Charts row 1 -->
-            <div class="grid gap-6 lg:grid-cols-3">
-              <div id="widget-chart-requests" class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60 lg:col-span-2">
-                <div class="mb-4 flex items-start justify-between gap-2">
-                  <div>
-                    <h2 class="text-base font-semibold text-slate-900 dark:text-white">Request frequency</h2>
-                    <p class="text-sm text-slate-500 dark:text-slate-400">Hourly volume from processed log data</p>
+          <!-- ============================================================ -->
+          <!-- Overview                                                      -->
+          <!-- ============================================================ -->
+          <section class="view" data-view="overview" data-title="Overview" data-needs-dataset hidden>
+            <header class="page-head">
+              <div>
+                <p class="kicker">Overview</p>
+                <h1 class="page-title" id="ov-title">What this log shows</h1>
+                <p class="context-line" id="ov-context"></p>
+              </div>
+              <div class="page-actions">
+                <label class="sr-only" for="ov-from">From date</label>
+                <input type="date" class="input" id="ov-from" style="width:auto" />
+                <span class="faint" aria-hidden="true">to</span>
+                <label class="sr-only" for="ov-to">To date</label>
+                <input type="date" class="input" id="ov-to" style="width:auto" />
+                <button type="button" class="btn btn-quiet btn-sm" id="ov-range-clear" hidden>Whole log</button>
+                <div class="notif-wrap">
+                  <button type="button" class="icon-btn" id="ov-customise" aria-label="Choose which sections to show" title="Choose sections" aria-haspopup="true" aria-expanded="false"><svg class="icon"><use href="#i-sliders" /></svg></button>
+                  <div class="popover popover-right" id="ov-customise-pop" style="top:calc(100% + 8px)" hidden>
+                    <div class="popover-head"><span class="popover-title">Sections on this page</span></div>
+                    <div class="popover-body" style="padding:var(--space-sm) var(--space-md);display:grid;gap:var(--space-sm)">
+                      <label class="check"><input type="checkbox" data-widget-toggle="figures" checked />Key figures</label>
+                      <label class="check"><input type="checkbox" data-widget-toggle="signals" checked />What needs attention</label>
+                      <label class="check"><input type="checkbox" data-widget-toggle="traffic" checked />Traffic over time</label>
+                      <label class="check"><input type="checkbox" data-widget-toggle="status" checked />Responses and errors</label>
+                      <label class="check"><input type="checkbox" data-widget-toggle="hours" checked />Time of day</label>
+                      <label class="check"><input type="checkbox" data-widget-toggle="endpoints" checked />Most requested</label>
+                    </div>
                   </div>
                 </div>
-                <div class="h-72 w-full"><canvas id="chart-requests"></canvas></div>
+                <button type="button" class="icon-btn" id="ov-refresh" aria-label="Recalculate analytics" title="Recalculate analytics"><svg class="icon"><use href="#i-refresh" /></svg></button>
               </div>
-              <div id="widget-chart-status" class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-                <h2 class="text-base font-semibold text-slate-900 dark:text-white">Status distribution</h2>
-                <p class="text-sm text-slate-500 dark:text-slate-400">HTTP response classes</p>
-                <div class="mx-auto mt-4 h-56 w-full max-w-[240px]"><canvas id="chart-status"></canvas></div>
-              </div>
+            </header>
+
+            <p class="lede" id="ov-lede"></p>
+
+            <div class="figures" data-widget="figures">
+              <div class="figure"><p class="figure-label">Requests</p><p class="figure-value" id="fig-requests">—</p><p class="figure-note" id="fig-requests-note">&nbsp;</p></div>
+              <div class="figure"><p class="figure-label">Error rate</p><p class="figure-value" id="fig-errors">—</p><p class="figure-note" id="fig-errors-note">&nbsp;</p></div>
+              <div class="figure"><p class="figure-label">Unique visitors</p><p class="figure-value" id="fig-visitors">—</p><p class="figure-note" id="fig-visitors-note">&nbsp;</p></div>
+              <div class="figure"><p class="figure-label">Average response</p><p class="figure-value" id="fig-size">—</p><p class="figure-note">per request</p></div>
             </div>
 
-            <!-- Charts row 2 -->
-            <div class="grid gap-6 lg:grid-cols-2">
-              <div id="widget-chart-endpoints" class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-                <h2 class="text-base font-semibold text-slate-900 dark:text-white">Top endpoints</h2>
-                <p class="text-sm text-slate-500 dark:text-slate-400">Most requested paths</p>
-                <div class="mt-4 h-72"><canvas id="chart-endpoints"></canvas></div>
+            <section class="section" data-widget="signals" aria-labelledby="ov-signals-title">
+              <div class="section-head">
+                <h2 class="section-title" id="ov-signals-title">What needs attention</h2>
+                <p class="section-note">Conclusions from the three analysis modules for the whole log.</p>
               </div>
-              <div id="widget-chart-traffic" class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-                <h2 class="text-base font-semibold text-slate-900 dark:text-white">Traffic patterns</h2>
-                <p class="text-sm text-slate-500 dark:text-slate-400">Request volume by hour of day</p>
-                <div class="mt-4 h-72"><canvas id="chart-traffic"></canvas></div>
-              </div>
-            </div>
-          </section>
+              <div class="signals" id="ov-signals"></div>
+            </section>
 
-          <!-- ============================================================ -->
-          <!-- Upload                                                        -->
-          <!-- ============================================================ -->
-          <section data-view="upload" class="hidden max-w-3xl space-y-6">
-            <!-- Viewer restriction notice (shown by JS for read-only roles) -->
-            <div id="upload-restricted" class="hidden rounded-2xl border border-amber-200/80 bg-amber-50 px-5 py-6 text-center dark:border-amber-800/30 dark:bg-amber-950/20">
-              <p class="text-sm font-medium text-amber-700 dark:text-amber-300">You have view-only access.</p>
-              <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">Uploading log files requires Analyst or Admin access. Contact your admin to request elevated permissions.</p>
-            </div>
-            <div id="upload-content">
-            <div
-              id="drop-zone"
-              class="group cursor-pointer rounded-2xl border-2 border-dashed border-slate-300 bg-white/50 p-10 text-center transition-all hover:border-indigo-400 hover:bg-indigo-50/30 dark:border-slate-600 dark:bg-slate-900/40 dark:hover:border-indigo-500 dark:hover:bg-indigo-950/20"
-            >
-              <input id="file-input" type="file" accept=".log,.txt,.gz,text/plain,application/gzip" class="hidden" multiple />
-              <div class="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-100 text-indigo-600 transition group-hover:scale-105 dark:bg-indigo-950/60 dark:text-indigo-400">
-                <svg class="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
-              </div>
-              <p class="mt-4 text-lg font-semibold text-slate-900 dark:text-white">Drop log files here</p>
-              <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">or click to browse — Apache / Nginx access logs</p>
-              <p id="upload-hint" class="mt-4 text-xs text-slate-400">Select one or more log files to upload.</p>
-            </div>
-            <div>
-              <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Upload queue</h2>
-              <div id="upload-queue" class="mt-3 space-y-3"></div>
-            </div>
-            </div><!-- /upload-content -->
-          </section>
-
-          <!-- ============================================================ -->
-          <!-- Datasets                                                      -->
-          <!-- ============================================================ -->
-          <section data-view="datasets" class="hidden space-y-4">
-            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <p class="text-sm text-slate-600 dark:text-slate-400">Manage imported datasets. Select a completed dataset to analyse it.</p>
-              <a id="datasets-upload-btn" href="#/upload" data-route="upload" class="inline-flex items-center justify-center rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:bg-indigo-500">Upload new</a>
-            </div>
-            <div class="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-              <div class="log-scroll overflow-x-auto">
-                <table class="min-w-full text-left text-sm">
-                  <thead class="border-b border-slate-200 bg-slate-50/80 dark:border-slate-800 dark:bg-slate-800/30">
-                    <tr>
-                      <th class="whitespace-nowrap px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">ID</th>
-                      <th class="whitespace-nowrap px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">Filename</th>
-                      <th class="whitespace-nowrap px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">Source</th>
-                      <th class="whitespace-nowrap px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">Size</th>
-                      <th class="whitespace-nowrap px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">Entries</th>
-                      <th class="whitespace-nowrap px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">Uploaded</th>
-                      <th class="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-700 dark:text-slate-300">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody id="datasets-body" class="divide-y divide-slate-100 dark:divide-slate-800"></tbody>
-                </table>
-              </div>
-            </div>
-          </section>
-
-          <!-- ============================================================ -->
-          <!-- Log viewer                                                    -->
-          <!-- ============================================================ -->
-          <section data-view="viewer" class="hidden space-y-4">
-            <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-              <div class="grid w-full gap-3 sm:grid-cols-2 lg:max-w-3xl xl:grid-cols-4">
-                <label class="block">
-                  <span class="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Dataset</span>
-                  <select id="viewer-dataset" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
-                    <option value="">Select a dataset…</option>
-                  </select>
-                </label>
-                <label class="block">
-                  <span class="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">HTTP status</span>
-                  <select id="viewer-status" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
-                    <option value="all">All</option>
-                    <option value="2xx">2xx Success</option>
-                    <option value="3xx">3xx Redirect</option>
-                    <option value="4xx">4xx Client Errors</option>
-                    <option value="5xx">5xx Server Errors</option>
-                    <option value="errors">All Errors (4xx+5xx)</option>
-                  </select>
-                </label>
-                <label class="block">
-                  <span class="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">From</span>
-                  <input id="viewer-date-from" type="datetime-local" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:[color-scheme:dark]" />
-                </label>
-                <label class="block">
-                  <span class="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">To</span>
-                  <input id="viewer-date-to" type="datetime-local" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:[color-scheme:dark]" />
-                </label>
-              </div>
-              <div class="flex w-full flex-col gap-2 sm:flex-row sm:items-center lg:w-auto">
-                <div class="relative flex-1">
-                  <span class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
-                  </span>
-                  <input id="viewer-search" type="search" placeholder="Search path, IP…" class="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-9 pr-3 text-sm text-slate-800 placeholder-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
+            <section class="section" data-widget="traffic" aria-labelledby="ov-traffic-title">
+              <div class="section-head">
+                <h2 class="section-title" id="ov-traffic-title">Traffic over time</h2>
+                <div class="section-tools">
+                  <div class="segmented" id="ov-interval" role="group" aria-label="Bucket size">
+                    <button type="button" data-value="hour" aria-pressed="true">Hourly</button>
+                    <button type="button" data-value="day" aria-pressed="false">Daily</button>
+                  </div>
                 </div>
-                <button type="button" id="logs-refresh" class="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">Refresh</button>
               </div>
-            </div>
-            <p id="logs-meta" class="text-xs text-slate-500 dark:text-slate-400"></p>
-            <p id="viewer-date-hint" class="hidden text-xs text-indigo-600 dark:text-indigo-400"></p>
-            <div class="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-              <div class="log-scroll max-h-[min(70vh,560px)] overflow-auto">
-                <table class="min-w-full text-left text-sm">
-                  <thead class="sticky top-0 z-10 border-b border-slate-200 bg-slate-50/95 backdrop-blur dark:border-slate-800 dark:bg-slate-900/95">
-                    <tr>
-                      <th class="whitespace-nowrap px-3 py-3 font-semibold text-slate-700 dark:text-slate-300">Time</th>
-                      <th class="whitespace-nowrap px-3 py-3 font-semibold text-slate-700 dark:text-slate-300">Status</th>
-                      <th class="whitespace-nowrap px-3 py-3 font-semibold text-slate-700 dark:text-slate-300">Method</th>
-                      <th class="whitespace-nowrap px-3 py-3 font-semibold text-slate-700 dark:text-slate-300">IP Address</th>
-                      <th class="min-w-[12rem] px-3 py-3 font-semibold text-slate-700 dark:text-slate-300">Raw line</th>
-                    </tr>
-                  </thead>
-                  <tbody id="logs-body"></tbody>
-                </table>
-              </div>
-              <div class="flex items-center justify-between border-t border-slate-200 px-4 py-3 dark:border-slate-800">
-                <button type="button" id="logs-prev" class="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-40 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Previous</button>
-                <button type="button" id="logs-next" class="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-40 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Next</button>
-              </div>
-            </div>
-          </section>
+              <div class="chart chart-lg"><canvas id="chart-traffic" role="img" aria-label="Requests over time"></canvas></div>
+              <p class="caption" id="ov-traffic-caption"></p>
+            </section>
 
-          <!-- ============================================================ -->
-          <!-- Traffic Forecasting                                           -->
-          <!-- ============================================================ -->
-          <section data-view="forecast" class="hidden space-y-6">
-            <!-- Controls -->
-            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div class="flex flex-wrap items-center gap-3">
-                <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-                  Dataset
-                  <select id="forecast-dataset" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
-                    <option value="">Select…</option>
-                  </select>
-                </label>
-                <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-                  Method
-                  <select id="forecast-method" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
-                    <option value="moving_avg">Seasonal Pattern</option>
-                    <option value="linear_regression">Linear Regression</option>
-                    <option value="ml">Machine Learning (AI)</option>
-                  </select>
-                </label>
-                <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-                  Periods (hrs)
-                  <input id="forecast-periods" type="number" min="1" max="168" value="24" class="w-20 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
-                </label>
-              </div>
-              <button type="button" id="forecast-run" class="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:bg-indigo-500">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>
-                Run Forecast
-              </button>
-            </div>
-
-            <!-- Fallback notice (e.g. not enough history for the ML model) -->
-            <div id="forecast-note" class="hidden rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm font-medium text-amber-700 dark:border-amber-800/40 dark:bg-amber-950/20 dark:text-amber-300"></div>
-
-            <!-- Result cards -->
-            <div id="forecast-summary-cards" class="hidden grid gap-4 sm:grid-cols-3">
-              <div class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-                <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Historical points</p>
-                <p id="forecast-stat-points" class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">—</p>
-              </div>
-              <div class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-                <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Avg. hourly requests</p>
-                <p id="forecast-stat-avg" class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">—</p>
-              </div>
-              <div class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-                <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Trend</p>
-                <p id="forecast-stat-trend" class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">—</p>
-              </div>
-            </div>
-
-            <!-- Chart -->
-            <div class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-              <div class="mb-4 flex items-start justify-between gap-2">
+            <div class="cols cols-wide">
+              <section class="section" data-widget="status" aria-labelledby="ov-status-title">
+                <div class="section-head"><h2 class="section-title" id="ov-status-title">Responses and errors</h2></div>
+                <div class="stackbar" id="ov-stackbar" role="img" aria-label="Share of responses by status class"></div>
+                <div class="table-wrap" style="border-top:0">
+                  <table class="table"><thead><tr><th>Status class</th><th class="r">Requests</th><th class="r">Share</th></tr></thead><tbody id="ov-status-body"></tbody></table>
+                </div>
                 <div>
-                  <h2 class="text-base font-semibold text-slate-900 dark:text-white">Traffic Forecast</h2>
-                  <p class="text-sm text-slate-500 dark:text-slate-400">Most recent history (solid) vs. predicted values (dashed)</p>
+                  <p class="label-sm">URLs that fail most often</p>
+                  <ol class="rank" id="ov-error-urls"></ol>
                 </div>
-                <div class="flex items-center gap-3 text-xs text-slate-500">
-                  <span class="flex items-center gap-1.5"><span class="inline-block h-0.5 w-6 rounded bg-indigo-500"></span>Historical</span>
-                  <span class="flex items-center gap-1.5"><span class="inline-block h-0.5 w-6 rounded border-t-2 border-dashed border-amber-500 bg-transparent"></span>Forecast</span>
-                </div>
-              </div>
-              <div id="forecast-empty" class="flex h-72 items-center justify-center text-slate-400 dark:text-slate-600">
-                <div class="text-center">
-                  <svg class="mx-auto mb-3 h-12 w-12 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>
-                  <p class="text-sm">Select a dataset and click Run Forecast</p>
-                </div>
-              </div>
-              <div id="forecast-chart-wrap" class="hidden h-72 w-full"><canvas id="chart-forecast"></canvas></div>
+              </section>
+
+              <section class="section" data-widget="hours" aria-labelledby="ov-hours-title">
+                <div class="section-head"><h2 class="section-title" id="ov-hours-title">Time of day</h2></div>
+                <div class="chart chart-sm"><canvas id="chart-hours" role="img" aria-label="Requests by hour of day"></canvas></div>
+                <p class="caption" id="ov-hours-caption"></p>
+              </section>
             </div>
 
-            <!-- Accuracy comparison (back-test) -->
-            <div id="forecast-evaluation" class="hidden rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-              <div class="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
-                <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Accuracy check</h3>
-                <p id="forecast-evaluation-desc" class="mt-1 text-sm text-slate-500 dark:text-slate-400"></p>
+            <section class="section" data-widget="endpoints" aria-labelledby="ov-endpoints-title">
+              <div class="section-head">
+                <h2 class="section-title" id="ov-endpoints-title">Most requested</h2>
+                <p class="section-note" id="ov-endpoints-note"></p>
               </div>
-              <div class="overflow-x-auto">
-                <table class="w-full text-left text-sm">
-                  <thead class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                    <tr>
-                      <th class="px-5 py-3 font-medium">Method</th>
-                      <th class="px-5 py-3 text-right font-medium" title="Mean absolute error: the average number of requests per hour the forecast was off by">Average error (MAE)</th>
-                      <th class="px-5 py-3 text-right font-medium" title="Root mean squared error: like MAE, but large misses count for more">RMSE</th>
-                    </tr>
-                  </thead>
-                  <tbody id="forecast-evaluation-rows" class="divide-y divide-slate-100 dark:divide-slate-800"></tbody>
+              <ol class="rank" id="ov-endpoints"></ol>
+            </section>
+          </section>
+
+          <!-- ============================================================ -->
+          <!-- Datasets (library + upload)                                   -->
+          <!-- ============================================================ -->
+          <section class="view" data-view="datasets" data-title="Datasets" hidden>
+            <header class="page-head">
+              <div>
+                <p class="kicker">Library</p>
+                <h1 class="page-title">Datasets</h1>
+                <p class="context-line">Each uploaded log file becomes one dataset. Open one to make it the working dataset for every other page.</p>
+              </div>
+            </header>
+
+            <div data-requires-edit>
+              <div class="dropzone" id="dropzone">
+                <span class="dropzone-mark" aria-hidden="true"><svg class="icon icon-lg"><use href="#i-upload" /></svg></span>
+                <div>
+                  <p class="dropzone-title">Drop an access log here</p>
+                  <p class="dropzone-text" id="upload-hint">Apache or Nginx access logs: .log, .txt, or either gzipped.</p>
+                </div>
+                <label class="btn btn-primary" for="file-input">Choose file</label>
+                <input type="file" id="file-input" class="sr-only" accept=".log,.txt,.gz" multiple />
+              </div>
+            </div>
+            <div class="uploads" id="uploads" aria-live="polite"></div>
+
+            <section class="section" aria-labelledby="ds-list-title">
+              <div class="section-head">
+                <h2 class="section-title" id="ds-list-title">Uploaded logs</h2>
+                <p class="section-note" id="ds-list-note"></p>
+              </div>
+              <div class="table-wrap" id="ds-table-wrap">
+                <table class="table table-hover">
+                  <thead><tr><th>Name</th><th>Status</th><th class="r">Entries</th><th class="r hide-sm">Size</th><th class="hide-sm">Uploaded</th><th class="r"><span class="sr-only">Actions</span></th></tr></thead>
+                  <tbody id="ds-table-body"></tbody>
                 </table>
               </div>
-            </div>
-
-            <!-- Method explanation -->
-            <div class="rounded-2xl border border-slate-200/80 bg-slate-50 p-5 dark:border-slate-800 dark:bg-slate-900/40">
-              <h3 class="mb-2 text-sm font-semibold text-slate-700 dark:text-slate-300">How it works</h3>
-              <p id="forecast-method-desc" class="text-sm leading-relaxed text-slate-600 dark:text-slate-400">
-                <strong>Seasonal Pattern:</strong> Averages traffic per hour-of-day across the full dataset history, then projects those daily rhythms forward with a trend adjustment. Produces realistic peaks and troughs rather than a flat line.
-              </p>
-            </div>
+              <div class="empty" id="ds-empty" hidden>
+                <p class="empty-mark" aria-hidden="true">Empty</p>
+                <h2 class="empty-title">No logs uploaded yet</h2>
+                <p class="empty-text">Upload an access log above. LogSight parses every line, then the overview, forecast, anomaly and security pages are ready to read.</p>
+              </div>
+            </section>
           </section>
 
           <!-- ============================================================ -->
-          <!-- Anomaly Detection                                             -->
+          <!-- Explore (log entries: browse, filter, search)                 -->
           <!-- ============================================================ -->
-          <section data-view="anomalies" class="hidden space-y-6">
-            <!-- Controls -->
-            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div class="flex flex-wrap items-center gap-3">
-                <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-                  Dataset
-                  <select id="anomaly-dataset" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
-                    <option value="">Select…</option>
-                  </select>
-                </label>
-                <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-                  Method
-                  <select id="anomaly-method" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
-                    <option value="statistical">Statistical threshold</option>
-                    <option value="isolation_forest">Isolation Forest (AI)</option>
-                  </select>
-                </label>
-                <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-                  Sensitivity
-                  <select id="anomaly-sensitivity" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
-                    <option value="low">Low — only major spikes</option>
-                    <option value="medium" selected>Medium — balanced</option>
-                    <option value="high">High — catch subtle shifts</option>
-                  </select>
-                </label>
+          <section class="view" data-view="explore" data-title="Explore" data-needs-dataset hidden>
+            <header class="page-head">
+              <div>
+                <p class="kicker">Explore</p>
+                <h1 class="page-title">Individual requests</h1>
+                <p class="context-line" id="ex-context"></p>
               </div>
-              <button type="button" id="anomaly-run" class="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:bg-indigo-500">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
-                Detect Anomalies
-              </button>
+              <div class="page-actions">
+                <button type="button" class="btn btn-quiet btn-sm" id="ex-save"><svg class="icon icon-sm"><use href="#i-bookmark" /></svg>Save this filter</button>
+                <button type="button" class="btn btn-sm" id="ex-clear">Clear filters</button>
+              </div>
+            </header>
+
+            <form class="filters" id="ex-form" autocomplete="off">
+              <div class="field span-2"><label class="label-sm" for="ex-q">Contains</label><input class="input" id="ex-q" type="search" placeholder="Part of a path or client address" /></div>
+              <div class="field"><label class="label-sm" for="ex-status">Status</label>
+                <select class="select" id="ex-status">
+                  <option value="all">Any status</option><option value="errors">Errors (4xx and 5xx)</option>
+                  <option value="2xx">2xx success</option><option value="3xx">3xx redirect</option><option value="4xx">4xx client error</option><option value="5xx">5xx server error</option>
+                </select></div>
+              <div class="field"><label class="label-sm" for="ex-method">Method</label>
+                <select class="select" id="ex-method"><option value="">Any method</option><option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option><option>PATCH</option><option>HEAD</option><option>OPTIONS</option></select></div>
+              <div class="field"><label class="label-sm" for="ex-ip">Client</label><input class="input" id="ex-ip" type="text" placeholder="IP address or host" /></div>
+              <div class="field"><label class="label-sm" for="ex-endpoint">Path</label><input class="input" id="ex-endpoint" type="text" placeholder="/login" /></div>
+              <div class="field"><label class="label-sm" for="ex-from">From</label><input class="input" id="ex-from" type="datetime-local" /></div>
+              <div class="field"><label class="label-sm" for="ex-to">To</label><input class="input" id="ex-to" type="datetime-local" /></div>
+            </form>
+            <div class="chips" id="ex-chips" aria-live="polite"></div>
+            <div class="chips" id="ex-saved"></div>
+
+            <section class="section" aria-labelledby="ex-count">
+              <div class="section-head">
+                <h2 class="section-title" id="ex-count">Requests</h2>
+                <p class="section-note">Select a row to see the full log line.</p>
+              </div>
+              <div class="table-wrap" id="ex-table-wrap">
+                <table class="table table-hover">
+                  <thead><tr><th>Time (UTC)</th><th class="hide-sm">Client</th><th>Method</th><th>Path</th><th class="r">Status</th><th class="r hide-sm">Size</th></tr></thead>
+                  <tbody id="ex-body"></tbody>
+                </table>
+              </div>
+              <div class="empty" id="ex-empty" hidden>
+                <p class="empty-mark" aria-hidden="true">0</p>
+                <h2 class="empty-title">No requests match these filters</h2>
+                <p class="empty-text">Loosen a filter or clear them all to see every request in the dataset.</p>
+                <div class="empty-actions"><button type="button" class="btn" data-action="ex-clear">Clear filters</button></div>
+              </div>
+              <div class="pager">
+                <span id="ex-page"></span>
+                <span class="pager-buttons"><button type="button" class="btn btn-sm" id="ex-prev">Previous</button><button type="button" class="btn btn-sm" id="ex-next">Next</button></span>
+              </div>
+            </section>
+          </section>
+
+          <!-- ============================================================ -->
+          <!-- Forecast                                                      -->
+          <!-- ============================================================ -->
+          <section class="view" data-view="forecast" data-section="Analyse" data-title="Forecast" data-needs-dataset hidden>
+            <header class="page-head">
+              <div>
+                <p class="kicker">Analyse</p>
+                <h1 class="page-title">Traffic forecast</h1>
+                <p class="context-line" id="fc-context"></p>
+              </div>
+            </header>
+
+            <div class="controls">
+              <div class="control"><span class="label-sm" id="fc-method-label">Method</span>
+                <div class="segmented" id="fc-method" role="group" aria-labelledby="fc-method-label">
+                  <button type="button" data-value="ml" aria-pressed="true">Machine learning</button>
+                  <button type="button" data-value="moving_avg" aria-pressed="false">Seasonal pattern</button>
+                  <button type="button" data-value="linear_regression" aria-pressed="false">Linear trend</button>
+                </div></div>
+              <div class="control"><span class="label-sm" id="fc-horizon-label">Look ahead</span>
+                <div class="segmented" id="fc-horizon" role="group" aria-labelledby="fc-horizon-label">
+                  <button type="button" data-value="12" aria-pressed="false">12 h</button>
+                  <button type="button" data-value="24" aria-pressed="true">24 h</button>
+                  <button type="button" data-value="48" aria-pressed="false">2 days</button>
+                  <button type="button" data-value="168" aria-pressed="false">7 days</button>
+                </div></div>
             </div>
 
-            <!-- Fallback notice (e.g. not enough history for the Isolation Forest) -->
-            <div id="anomaly-note" class="hidden rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm font-medium text-amber-700 dark:border-amber-800/40 dark:bg-amber-950/20 dark:text-amber-300"></div>
-
-            <!-- Summary banner -->
-            <div id="anomaly-summary-banner" class="hidden rounded-2xl border px-5 py-4">
-              <p id="anomaly-summary-text" class="text-sm font-medium"></p>
+            <div>
+              <p class="lede" id="fc-lede"></p>
+              <div class="notice notice-warn" id="fc-note" style="margin-top:var(--space-md)" hidden><svg class="icon"><use href="#i-info" /></svg><span></span></div>
             </div>
 
-            <!-- Summary cards -->
-            <div id="anomaly-summary-cards" class="hidden grid gap-4 sm:grid-cols-4">
-              <div class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-                <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Total anomalies</p>
-                <p id="anomaly-stat-total" class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">0</p>
-              </div>
-              <div class="card-lift rounded-2xl border border-red-100 bg-white p-5 shadow-card dark:border-red-900/30 dark:bg-slate-900/60">
-                <p class="text-sm font-medium text-red-500">Critical</p>
-                <p id="anomaly-stat-high" class="mt-2 text-2xl font-bold text-red-600 dark:text-red-400">0</p>
-              </div>
-              <div class="card-lift rounded-2xl border border-amber-100 bg-white p-5 shadow-card dark:border-amber-900/30 dark:bg-slate-900/60">
-                <p class="text-sm font-medium text-amber-500">Notable</p>
-                <p id="anomaly-stat-medium" class="mt-2 text-2xl font-bold text-amber-600 dark:text-amber-400">0</p>
-              </div>
-              <div class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-                <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Minor</p>
-                <p id="anomaly-stat-low" class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">0</p>
-              </div>
-            </div>
-
-            <!-- Chart -->
-            <div class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-              <h2 class="mb-1 text-base font-semibold text-slate-900 dark:text-white">Request Volume with Anomalies</h2>
-              <p class="mb-4 text-sm text-slate-500 dark:text-slate-400">Red markers show detected anomalous hours. Hover a marker for details.</p>
-              <div id="anomaly-empty" class="flex h-72 items-center justify-center text-slate-400 dark:text-slate-600">
-                <div class="text-center">
-                  <svg class="mx-auto mb-3 h-12 w-12 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
-                  <p class="text-sm">Select a dataset and click Detect Anomalies</p>
+            <section class="section" aria-labelledby="fc-chart-title">
+              <div class="section-head">
+                <h2 class="section-title" id="fc-chart-title">Recent traffic and the forecast</h2>
+                <div class="legend">
+                  <span><i class="swatch"></i>Recorded</span><span><i class="swatch swatch-dash"></i>Forecast</span><span><i class="swatch swatch-band"></i>Likely range</span>
                 </div>
               </div>
-              <div id="anomaly-chart-wrap" class="hidden h-72 w-full"><canvas id="chart-anomalies"></canvas></div>
-            </div>
+              <div class="chart chart-lg"><canvas id="chart-forecast" role="img" aria-label="Recorded and forecast requests per hour"></canvas></div>
+              <p class="caption" id="fc-caption"></p>
+            </section>
 
-            <!-- Anomaly list -->
-            <div id="anomaly-list-wrap" class="hidden rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-              <div class="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
-                <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Findings</h3>
+            <section class="section" id="fc-eval" aria-labelledby="fc-eval-title" hidden>
+              <div class="section-head">
+                <h2 class="section-title" id="fc-eval-title">How accurate is it?</h2>
+                <p class="section-note" id="fc-eval-desc"></p>
               </div>
-              <div class="divide-y divide-slate-100 dark:divide-slate-800" id="anomaly-list"></div>
-            </div>
+              <div class="table-wrap">
+                <table class="table">
+                  <thead><tr><th>Method</th><th>Average error</th><th class="r" title="Mean absolute error, in requests per hour">MAE</th><th class="r" title="Root mean squared error: large misses count for more">RMSE</th></tr></thead>
+                  <tbody id="fc-eval-body"></tbody>
+                </table>
+              </div>
+            </section>
 
-            <!-- Method explanation -->
-            <div class="rounded-2xl border border-slate-200/80 bg-slate-50 p-5 dark:border-slate-800 dark:bg-slate-900/40">
-              <h3 class="mb-2 text-sm font-semibold text-slate-700 dark:text-slate-300">How it works</h3>
-              <p id="anomaly-method-desc" class="text-sm leading-relaxed text-slate-600 dark:text-slate-400">
-                <strong>Statistical threshold:</strong> Works out the average request count and error rate per hour, then flags any hour that sits far above that average. Each measure is checked on its own.
-              </p>
-            </div>
+            <details class="disclosure">
+              <summary><svg class="icon"><use href="#i-chevron-right" /></svg>How this method works</summary>
+              <div class="disclosure-body" id="fc-how"></div>
+            </details>
           </section>
 
           <!-- ============================================================ -->
-          <!-- Alerts                                                        -->
+          <!-- Anomalies                                                     -->
           <!-- ============================================================ -->
-          <section data-view="alerts" class="hidden space-y-6">
-            <p class="text-sm text-slate-600 dark:text-slate-400">Select a dataset and run a health check. LogSight automatically checks for high error rates and unusual traffic spikes — no configuration needed.</p>
-
-            <!-- Dataset selector + Run Check -->
-            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-                Dataset
-                <select id="alerts-dataset" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
-                  <option value="">Select…</option>
-                </select>
-              </label>
-              <button type="button" id="alerts-check" class="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:bg-indigo-500">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                Run Health Check
-              </button>
-            </div>
-
-            <!-- Overall status banner -->
-            <div id="alerts-status-banner" class="hidden rounded-2xl border px-5 py-4">
-              <p id="alerts-status-text" class="text-sm font-semibold"></p>
-            </div>
-
-            <!-- Check result cards -->
-            <div id="alerts-results" class="hidden grid gap-4 sm:grid-cols-2"></div>
-
-            <!-- Thresholds info -->
-            <div class="rounded-2xl border border-slate-200/80 bg-slate-50 p-5 dark:border-slate-800 dark:bg-slate-900/40">
-              <h3 class="mb-2 text-sm font-semibold text-slate-700 dark:text-slate-300">How checks work</h3>
-              <ul class="space-y-1.5 text-sm text-slate-600 dark:text-slate-400">
-                <li><span class="font-medium text-slate-700 dark:text-slate-300">Error Rate</span> — Warning above 10 %, Critical above 25 %.</li>
-                <li><span class="font-medium text-slate-700 dark:text-slate-300">Traffic Spike</span> — Warning when the last recorded hour is 2× the dataset average; Critical at 3×.</li>
-              </ul>
-            </div>
-
-            <!-- Triggered alert history (all datasets) -->
-            <div class="card-lift rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-              <div class="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
-                <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Triggered Alerts — All Datasets</h3>
-                <button type="button" id="alerts-history-refresh" class="text-xs text-indigo-600 hover:underline dark:text-indigo-400">Refresh</button>
+          <section class="view" data-view="anomalies" data-section="Analyse" data-title="Anomalies" data-needs-dataset hidden>
+            <header class="page-head">
+              <div>
+                <p class="kicker">Analyse</p>
+                <h1 class="page-title">Unusual hours</h1>
+                <p class="context-line" id="an-context"></p>
               </div>
-              <div id="alerts-history-wrap">
-                <p class="px-5 py-6 text-center text-sm text-slate-400">No alerts recorded yet.</p>
+            </header>
+
+            <div class="controls">
+              <div class="control"><span class="label-sm" id="an-method-label">Method</span>
+                <div class="segmented" id="an-method" role="group" aria-labelledby="an-method-label">
+                  <button type="button" data-value="isolation_forest" aria-pressed="true">Isolation Forest (AI)</button>
+                  <button type="button" data-value="statistical" aria-pressed="false">Statistical threshold</button>
+                </div></div>
+              <div class="control"><span class="label-sm" id="an-sens-label">Sensitivity</span>
+                <div class="segmented" id="an-sensitivity" role="group" aria-labelledby="an-sens-label">
+                  <button type="button" data-value="low" aria-pressed="false">Low</button>
+                  <button type="button" data-value="medium" aria-pressed="true">Medium</button>
+                  <button type="button" data-value="high" aria-pressed="false">High</button>
+                </div></div>
+            </div>
+
+            <div>
+              <p class="lede" id="an-lede"></p>
+              <div class="notice notice-warn" id="an-note" style="margin-top:var(--space-md)" hidden><svg class="icon"><use href="#i-info" /></svg><span></span></div>
+            </div>
+
+            <section class="section" aria-labelledby="an-chart-title">
+              <div class="section-head">
+                <h2 class="section-title" id="an-chart-title">Requests per hour, with flagged hours marked</h2>
+                <div class="legend"><span><i class="swatch"></i>Requests</span><span><i class="swatch-point"></i>Flagged hour</span></div>
               </div>
+              <div class="chart chart-lg"><canvas id="chart-anomalies" role="img" aria-label="Requests per hour with anomalous hours marked"></canvas></div>
+            </section>
+
+            <section class="section" aria-labelledby="an-list-title">
+              <div class="section-head">
+                <h2 class="section-title" id="an-list-title">Flagged hours</h2>
+                <div class="section-tools">
+                  <div class="segmented" id="an-filter" role="group" aria-label="Show severity">
+                    <button type="button" data-value="all" aria-pressed="true">All</button>
+                    <button type="button" data-value="high" aria-pressed="false">Critical</button>
+                    <button type="button" data-value="medium" aria-pressed="false">Notable</button>
+                    <button type="button" data-value="low" aria-pressed="false">Minor</button>
+                  </div>
+                </div>
+              </div>
+              <div class="tally" id="an-tally"></div>
+              <div class="findings" id="an-list"></div>
+            </section>
+
+            <details class="disclosure">
+              <summary><svg class="icon"><use href="#i-chevron-right" /></svg>How this method works</summary>
+              <div class="disclosure-body" id="an-how"></div>
+            </details>
+          </section>
+
+          <!-- ============================================================ -->
+          <!-- Security                                                      -->
+          <!-- ============================================================ -->
+          <section class="view" data-view="security" data-section="Analyse" data-title="Security" data-needs-dataset hidden>
+            <header class="page-head">
+              <div>
+                <p class="kicker">Analyse</p>
+                <h1 class="page-title">Security findings</h1>
+                <p class="context-line" id="se-context"></p>
+              </div>
+            </header>
+
+            <div class="score" id="se-score">
+              <div>
+                <p class="label-sm">Risk score</p>
+                <p class="score-value"><span id="se-score-value">—</span><small>/ 100</small></p>
+              </div>
+              <div>
+                <p class="lede" id="se-lede"></p>
+                <div class="score-scale" aria-hidden="true">
+                  <div class="score-track"><i></i><i></i><i></i></div>
+                  <span class="score-pin" id="se-score-pin"></span>
+                </div>
+                <div class="score-ticks" aria-hidden="true"><span>Low</span><span>Moderate</span><span>High</span></div>
+              </div>
+            </div>
+
+            <section class="section" aria-labelledby="se-class-title">
+              <div class="section-head">
+                <h2 class="section-title" id="se-class-title">What the classifier read</h2>
+                <p class="section-note" id="se-class-desc"></p>
+              </div>
+              <div id="se-classes"></div>
+              <p class="caption" id="se-model"></p>
+            </section>
+
+            <section class="section" aria-labelledby="se-findings-title">
+              <div class="section-head">
+                <h2 class="section-title" id="se-findings-title">Findings</h2>
+                <p class="section-note">Behaviour rules count what each client did. The AI classifier reads what each request contained. Open a finding to see its evidence.</p>
+              </div>
+              <div class="findings" id="se-findings"></div>
+            </section>
+          </section>
+
+          <!-- ============================================================ -->
+          <!-- Compare                                                       -->
+          <!-- ============================================================ -->
+          <section class="view" data-view="compare" data-section="Analyse" data-title="Compare" hidden>
+            <header class="page-head">
+              <div>
+                <p class="kicker">Analyse</p>
+                <h1 class="page-title">Compare two datasets</h1>
+                <p class="context-line">Set a baseline and a second log side by side: volume, errors, visitors and daily rhythm.</p>
+              </div>
+            </header>
+
+            <div class="controls">
+              <div class="field" style="min-width:240px"><label class="label-sm" for="cmp-a">Baseline (A)</label><select class="select" id="cmp-a"></select></div>
+              <div class="field" style="min-width:240px"><label class="label-sm" for="cmp-b">Compared with (B)</label><select class="select" id="cmp-b"></select></div>
+            </div>
+
+            <div id="cmp-results" hidden>
+              <div class="view" style="gap:var(--space-2xl)">
+                <p class="lede" id="cmp-lede"></p>
+                <section class="section" aria-labelledby="cmp-table-title">
+                  <div class="section-head"><h2 class="section-title" id="cmp-table-title">Key figures</h2></div>
+                  <div class="table-wrap"><table class="table"><thead><tr><th>Measure</th><th class="r" id="cmp-name-a">A</th><th class="r" id="cmp-name-b">B</th><th class="r">Change, A to B</th></tr></thead><tbody id="cmp-body"></tbody></table></div>
+                </section>
+                <section class="section" aria-labelledby="cmp-chart-title">
+                  <div class="section-head">
+                    <h2 class="section-title" id="cmp-chart-title">Requests by hour of day</h2>
+                    <div class="legend"><span><i class="swatch"></i><span id="cmp-legend-a">A</span></span><span><i class="swatch swatch-b"></i><span id="cmp-legend-b">B</span></span></div>
+                  </div>
+                  <div class="chart"><canvas id="chart-compare" role="img" aria-label="Requests by hour of day for both datasets"></canvas></div>
+                </section>
+                <div class="cols">
+                  <section class="section"><div class="section-head"><h2 class="section-title" id="cmp-top-a-title">Most requested in A</h2></div><ol class="rank" id="cmp-top-a"></ol></section>
+                  <section class="section"><div class="section-head"><h2 class="section-title" id="cmp-top-b-title">Most requested in B</h2></div><ol class="rank" id="cmp-top-b"></ol></section>
+                </div>
+              </div>
+            </div>
+            <div class="empty" id="cmp-empty">
+              <p class="empty-mark" aria-hidden="true">A / B</p>
+              <h2 class="empty-title" id="cmp-empty-title">Choose a second dataset</h2>
+              <p class="empty-text" id="cmp-empty-text">Comparison needs two different completed datasets.</p>
             </div>
           </section>
 
           <!-- ============================================================ -->
           <!-- Reports                                                       -->
           <!-- ============================================================ -->
-          <section data-view="reports" class="hidden space-y-6">
-            <p class="text-sm text-slate-600 dark:text-slate-400">Generate a downloadable report containing summary metrics, top endpoints, status distribution, error breakdown, and detected anomalies.</p>
+          <section class="view" data-view="reports" data-section="Share" data-title="Reports" data-needs-dataset hidden>
+            <header class="page-head">
+              <div>
+                <p class="kicker">Share</p>
+                <h1 class="page-title">Download a report</h1>
+                <p class="context-line" id="rp-context"></p>
+              </div>
+            </header>
 
-            <div class="card-lift rounded-2xl border border-slate-200/80 bg-white p-6 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-              <h2 class="mb-5 text-base font-semibold text-slate-900 dark:text-white">Generate Report</h2>
-              <div class="grid gap-4 sm:grid-cols-3">
-                <label class="block">
-                  <span class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Dataset</span>
-                  <select id="report-dataset" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
-                    <option value="">Select a dataset…</option>
-                  </select>
-                </label>
-                <label class="block">
-                  <span class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Format</span>
-                  <select id="report-format" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
-                    <option value="csv">CSV (Spreadsheet)</option>
-                    <option value="json">JSON (Structured)</option>
-                  </select>
-                </label>
-                <div class="flex items-end">
-                  <button type="button" id="report-download" class="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:bg-indigo-500">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                    Download Report
-                  </button>
-                </div>
-              </div>
-            </div>
+            <section class="section" aria-labelledby="rp-contents-title">
+              <div class="section-head"><h2 class="section-title" id="rp-contents-title">What the report contains</h2></div>
+              <ol class="contents">
+                <li><div><b>Summary figures</b><span>Requests, errors, error rate, visitors, response size and the period covered.</span></div></li>
+                <li><div><b>Most requested URLs</b><span>The top 20 paths with counts and share of traffic.</span></div></li>
+                <li><div><b>Status codes</b><span>Every response code that appears, with how often.</span></div></li>
+                <li><div><b>Error breakdown</b><span>Client and server errors, and the codes behind them.</span></div></li>
+                <li><div><b>Unusual hours</b><span>Hours flagged by the statistical anomaly check, with explanations.</span></div></li>
+              </ol>
+            </section>
 
-            <!-- Report content sections -->
-            <div class="grid gap-6 lg:grid-cols-2">
-              <div class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-                <h3 class="mb-1 text-sm font-semibold text-slate-800 dark:text-slate-200">Report includes</h3>
-                <ul class="mt-3 space-y-2 text-sm text-slate-600 dark:text-slate-400">
-                  <li class="flex items-center gap-2"><svg class="h-4 w-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg> Total requests, error rate, unique visitors</li>
-                  <li class="flex items-center gap-2"><svg class="h-4 w-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg> Top 20 most-accessed endpoints</li>
-                  <li class="flex items-center gap-2"><svg class="h-4 w-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg> HTTP status code distribution</li>
-                  <li class="flex items-center gap-2"><svg class="h-4 w-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg> 4xx / 5xx error breakdown</li>
-                  <li class="flex items-center gap-2"><svg class="h-4 w-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg> Detected anomalies with explanations</li>
-                </ul>
+            <section class="section" aria-labelledby="rp-format-title">
+              <div class="section-head"><h2 class="section-title" id="rp-format-title">Format</h2></div>
+              <div class="option-tiles" role="radiogroup" aria-labelledby="rp-format-title">
+                <label class="option-tile"><input type="radio" name="rp-format" value="csv" checked /><span class="option-tile-body"><span class="option-tile-title">CSV</span><span class="option-tile-text">Opens in Excel or Google Sheets. Best for tables in a written report.</span></span></label>
+                <label class="option-tile"><input type="radio" name="rp-format" value="json" /><span class="option-tile-body"><span class="option-tile-title">JSON</span><span class="option-tile-text">Structured data for scripts and other tools.</span></span></label>
               </div>
-              <div class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-                <h3 class="mb-1 text-sm font-semibold text-slate-800 dark:text-slate-200">Format guide</h3>
-                <div class="mt-3 space-y-3 text-sm text-slate-600 dark:text-slate-400">
-                  <div>
-                    <p class="font-medium text-slate-700 dark:text-slate-300">CSV</p>
-                    <p class="mt-0.5">Structured spreadsheet with named sections. Open in Excel, Google Sheets, or any data analysis tool.</p>
-                  </div>
-                  <div>
-                    <p class="font-medium text-slate-700 dark:text-slate-300">JSON</p>
-                    <p class="mt-0.5">Machine-readable structured format. Useful for integration, archiving, or further programmatic analysis.</p>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <!-- ============================================================ -->
-          <!-- Security Insights                                            -->
-          <!-- ============================================================ -->
-          <section data-view="security" class="hidden space-y-6">
-            <p class="text-sm text-slate-600 dark:text-slate-400">Combines two kinds of analysis in one report: behaviour rules that count what each client did (brute force, scanning, error bursts), and an AI classifier that reads every request and recognises attack payloads such as SQL injection, XSS and path traversal.</p>
-            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-                Dataset
-                <select id="security-dataset" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
-                  <option value="">Select…</option>
-                </select>
-              </label>
-              <button type="button" id="security-run" class="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:bg-indigo-500">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /></svg>
-                Run Analysis
-              </button>
-            </div>
-            <!-- Risk score banner -->
-            <div id="security-banner" class="hidden rounded-2xl border px-5 py-4">
-              <div class="flex items-center justify-between">
-                <p id="security-summary" class="text-sm font-medium text-slate-700 dark:text-slate-300"></p>
-                <span id="security-score-badge" class="rounded-full px-3 py-1 text-sm font-bold"></span>
-              </div>
-            </div>
-            <!-- AI request classification breakdown -->
-            <div id="security-classification" class="hidden rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-              <div class="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
-                <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">AI request classification</h3>
-                <p id="security-classification-desc" class="mt-1 text-sm text-slate-500 dark:text-slate-400"></p>
-              </div>
-              <div id="security-classification-rows" class="space-y-3 px-5 py-4"></div>
-              <p id="security-classification-model" class="border-t border-slate-200 px-5 py-3 text-xs text-slate-500 dark:border-slate-800 dark:text-slate-400"></p>
-            </div>
-            <!-- Findings list -->
-            <div id="security-findings" class="space-y-4"></div>
-            <!-- Empty state -->
-            <div id="security-empty" class="flex h-56 items-center justify-center text-slate-400 dark:text-slate-600">
-              <div class="text-center">
-                <svg class="mx-auto mb-3 h-12 w-12 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /></svg>
-                <p class="text-sm">Select a dataset and click Run Analysis</p>
-              </div>
-            </div>
-          </section>
-
-          <!-- ============================================================ -->
-          <!-- Dataset Comparison                                            -->
-          <!-- ============================================================ -->
-          <section data-view="compare" class="hidden space-y-6">
-            <p class="text-sm text-slate-600 dark:text-slate-400">Select two datasets to compare their metrics, traffic patterns, and top endpoints side by side.</p>
-            <div class="flex flex-wrap items-center gap-4">
-              <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-                Dataset A
-                <select id="compare-dataset-a" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
-                  <option value="">Select…</option>
-                </select>
-              </label>
-              <span class="text-sm font-medium text-slate-400">vs.</span>
-              <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-                Dataset B
-                <select id="compare-dataset-b" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
-                  <option value="">Select…</option>
-                </select>
-              </label>
-              <button type="button" id="compare-run" class="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:bg-indigo-500">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
-                Compare
-              </button>
-            </div>
-            <!-- Metrics comparison table -->
-            <div id="compare-results" class="hidden space-y-6">
-              <div class="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-                <div class="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
-                  <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Metrics Comparison</h3>
-                </div>
-                <div id="compare-metrics-table" class="overflow-x-auto"></div>
-              </div>
-              <div class="grid gap-6 lg:grid-cols-2">
-                <div class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-                  <h3 class="mb-4 text-sm font-semibold text-slate-800 dark:text-slate-200">Traffic Patterns</h3>
-                  <div class="h-64"><canvas id="chart-compare-traffic"></canvas></div>
-                </div>
-                <div class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-                  <h3 class="mb-4 text-sm font-semibold text-slate-800 dark:text-slate-200">Top Endpoints — Dataset A</h3>
-                  <div id="compare-endpoints-a" class="space-y-1.5 text-sm text-slate-600 dark:text-slate-400"></div>
-                </div>
-              </div>
-            </div>
-            <div id="compare-empty" class="flex h-48 items-center justify-center text-slate-400 dark:text-slate-600">
-              <div class="text-center">
-                <svg class="mx-auto mb-3 h-12 w-12 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
-                <p class="text-sm">Select two datasets and click Compare</p>
-              </div>
-            </div>
-          </section>
-
-          <!-- ============================================================ -->
-          <!-- Advanced Search                                               -->
-          <!-- ============================================================ -->
-          <section data-view="search" class="hidden space-y-6">
-            <p class="text-sm text-slate-600 dark:text-slate-400">Build multi-field queries across your log data. Add filters, combine them with AND logic, and export results.</p>
-            <!-- Controls -->
-            <div class="flex flex-wrap items-center gap-3">
-              <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-                Dataset
-                <select id="search-dataset" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
-                  <option value="">Select…</option>
-                </select>
-              </label>
-            </div>
-            <!-- Filter builder -->
-            <div class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-              <div class="mb-3 flex items-center justify-between">
-                <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Filters</h3>
-                <button type="button" id="search-add-filter" class="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
-                  <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
-                  Add filter
-                </button>
-              </div>
-              <div id="search-filter-rows" class="space-y-2"></div>
-              <div class="mt-4 flex items-center gap-3">
-                <button type="button" id="search-run" class="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:bg-indigo-500">
-                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
-                  Search
-                </button>
-                <button type="button" id="search-save" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">Save Search</button>
-                <span id="search-meta" class="text-xs text-slate-400"></span>
-              </div>
-            </div>
-            <!-- Saved searches -->
-            <div id="search-saved-wrap" class="hidden rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-              <div class="border-b border-slate-200 px-5 py-3 dark:border-slate-800">
-                <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Saved Searches</h3>
-              </div>
-              <div id="search-saved-list" class="divide-y divide-slate-100 dark:divide-slate-800"></div>
-            </div>
-            <!-- Results table -->
-            <div id="search-results-wrap" class="hidden overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-              <div class="border-b border-slate-200 px-5 py-3 dark:border-slate-800 flex items-center justify-between">
-                <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Results</h3>
-                <span id="search-result-count" class="text-xs text-slate-400"></span>
-              </div>
-              <div class="log-scroll overflow-x-auto">
-                <table class="min-w-full text-left text-sm">
-                  <thead class="border-b border-slate-200 bg-slate-50/80 dark:border-slate-800 dark:bg-slate-800/30">
-                    <tr>
-                      <th class="whitespace-nowrap px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">Time</th>
-                      <th class="whitespace-nowrap px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">Status</th>
-                      <th class="whitespace-nowrap px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">Method</th>
-                      <th class="whitespace-nowrap px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">IP</th>
-                      <th class="px-4 py-3 font-semibold text-slate-700 dark:text-slate-300">Endpoint</th>
-                    </tr>
-                  </thead>
-                  <tbody id="search-results-body" class="divide-y divide-slate-100 dark:divide-slate-800"></tbody>
-                </table>
-              </div>
-              <div class="flex items-center justify-between border-t border-slate-100 px-5 py-3 dark:border-slate-800">
-                <button type="button" id="search-prev" class="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-40 dark:border-slate-700 dark:text-slate-300" disabled>← Prev</button>
-                <span id="search-page-info" class="text-xs text-slate-400"></span>
-                <button type="button" id="search-next" class="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-40 dark:border-slate-700 dark:text-slate-300" disabled>Next →</button>
-              </div>
-            </div>
-          </section>
-
-          <!-- ============================================================ -->
-          <!-- Live Ingestion Simulator                                      -->
-          <!-- ============================================================ -->
-          <section data-view="simulate" class="hidden space-y-6">
-            <p class="text-sm text-slate-600 dark:text-slate-400">Simulate real-time log ingestion by generating synthetic Apache/Nginx entries on demand. Useful for testing the analytics pipeline without a live server.</p>
-            <div id="simulate-restricted" class="hidden rounded-2xl border border-amber-200/80 bg-amber-50 px-5 py-6 text-center dark:border-amber-800/30 dark:bg-amber-950/20">
-              <p class="text-sm font-medium text-amber-700 dark:text-amber-300">You have view-only access.</p>
-              <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">Log simulation requires Analyst or Admin access.</p>
-            </div>
-            <div id="simulate-content">
-            <div class="flex flex-wrap items-center gap-4">
-              <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-                Target dataset
-                <select id="simulate-dataset" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
-                  <option value="">Select…</option>
-                </select>
-              </label>
-              <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-                Entries per batch
-                <input id="simulate-count" type="number" min="1" max="50" value="10" class="w-20 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
-              </label>
-              <div class="flex flex-wrap items-center gap-2">
-                <button type="button" id="simulate-once" class="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:bg-indigo-500">
-                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                  Generate Once
-                </button>
-                <button type="button" id="simulate-auto" class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
-                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                  Auto (every 3s)
-                </button>
-                <div class="h-5 w-px bg-slate-200 dark:bg-slate-700 mx-1"></div>
-                <button type="button" id="simulate-error-spike" class="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100 dark:border-red-800/50 dark:bg-red-950/30 dark:text-red-300" title="Inject mostly 4xx/5xx entries to trigger an error-rate alert">
-                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
-                  Spike Errors
-                </button>
-                <button type="button" id="simulate-traffic-spike" class="inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-700 transition hover:bg-amber-100 dark:border-amber-800/50 dark:bg-amber-950/30 dark:text-amber-300" title="Inject a burst of requests to trigger a traffic-spike alert">
-                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>
-                  Spike Traffic
-                </button>
-                <button type="button" id="simulate-download" class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300" title="Download all simulated entries for this dataset as CSV">
-                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                  Download CSV
-                </button>
-              </div>
-            </div>
-            <!-- Stats bar -->
-            <div id="simulate-stats" class="hidden grid grid-cols-3 gap-4">
-              <div class="card-lift rounded-2xl border border-slate-200/80 bg-white p-4 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-                <p class="text-xs text-slate-500 dark:text-slate-400">Total generated</p>
-                <p id="simulate-total" class="mt-1 text-xl font-bold text-slate-900 dark:text-white">0</p>
-              </div>
-              <div class="card-lift rounded-2xl border border-slate-200/80 bg-white p-4 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-                <p class="text-xs text-slate-500 dark:text-slate-400">Last batch</p>
-                <p id="simulate-last" class="mt-1 text-xl font-bold text-slate-900 dark:text-white">—</p>
-              </div>
-              <div class="card-lift rounded-2xl border border-slate-200/80 bg-white p-4 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-                <p class="text-xs text-slate-500 dark:text-slate-400">Status</p>
-                <p id="simulate-status" class="mt-1 text-sm font-semibold text-slate-900 dark:text-white">Idle</p>
-              </div>
-            </div>
-            <!-- Live feed -->
-            <div class="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-              <div class="border-b border-slate-200 px-5 py-3 dark:border-slate-800">
-                <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Live Feed</h3>
-              </div>
-            <div id="simulate-feed" class="log-scroll h-72 overflow-y-auto p-4 font-mono text-xs text-slate-600 dark:text-slate-400">
-                <p class="text-slate-400">Waiting for log entries…</p>
-              </div>
-            </div>
-            </div><!-- /simulate-content -->
-          </section>
-
-          <!-- ============================================================ -->
-          <!-- User Management (Admin only)                                 -->
-          <!-- ============================================================ -->
-          <section data-view="users" class="hidden space-y-6">
-            <p class="text-sm text-slate-600 dark:text-slate-400">Manage user accounts and assign roles. New users must be invited — they cannot self-register.</p>
-
-            <!-- Invite form -->
-            <div id="users-invite-wrap" class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60 space-y-5">
-              <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Add a new user</h3>
-
-              <!-- Option A: Send email invite -->
-              <div class="rounded-xl border border-slate-200/80 p-4 dark:border-slate-700/60">
-                <p class="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Send email invite</p>
-                <div class="flex flex-wrap items-end gap-3">
-                  <label class="block flex-1 min-w-48">
-                    <span class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Email address</span>
-                    <input id="invite-email" type="email" placeholder="colleague@example.com"
-                      class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
-                  </label>
-                  <label class="block">
-                    <span class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Role</span>
-                    <select id="invite-role-email" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
-                      <option value="analyst">Analyst</option>
-                      <option value="viewer">Viewer</option>
-                    </select>
-                  </label>
-                  <button type="button" id="invite-send-email" class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
-                    Send Email
-                  </button>
-                </div>
-              </div>
-
-              <!-- Option B: Generate token (no email needed) -->
-              <div class="rounded-xl border border-slate-200/80 p-4 dark:border-slate-700/60">
-                <p class="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Generate invite token</p>
-                <p class="mb-3 text-xs text-slate-500 dark:text-slate-400">No email required — copy the token and share it manually. The invitee enters their own details when they register.</p>
-                <div class="flex items-end gap-3">
-                  <label class="block">
-                    <span class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Role</span>
-                    <select id="invite-role-token" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
-                      <option value="analyst">Analyst</option>
-                      <option value="viewer">Viewer</option>
-                    </select>
-                  </label>
-                  <button type="button" id="invite-generate-token" class="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-3 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:bg-indigo-500">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" /></svg>
-                    Generate Token
-                  </button>
-                </div>
-              </div>
-
-              <div id="invite-msg" class="hidden"></div>
-              <p id="invite-err" class="mt-1 hidden text-xs text-red-600 dark:text-red-400"></p>
-            </div>
-
-            <!-- Pending invites -->
-            <div id="invites-wrap" class="hidden card-lift rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-              <div class="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
-                <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Pending Invites</h3>
-              </div>
-              <div id="invites-list" class="divide-y divide-slate-100 dark:divide-slate-800"></div>
-            </div>
-
-            <!-- Role legend -->
-            <div class="flex flex-wrap gap-3">
-              <span class="inline-flex items-center gap-1.5 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700 dark:border-indigo-800/40 dark:bg-indigo-950/20 dark:text-indigo-300">Admin — full access</span>
-              <span class="inline-flex items-center gap-1.5 rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-xs font-medium text-cyan-700 dark:border-cyan-800/40 dark:bg-cyan-950/20 dark:text-cyan-300">Analyst — upload &amp; analyse own data</span>
-              <span class="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-600 dark:border-slate-700 dark:bg-slate-800/40 dark:text-slate-300">Viewer — read-only dashboards</span>
-              <span class="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700 dark:border-amber-800/40 dark:bg-amber-950/20 dark:text-amber-300">Pending — awaiting role assignment</span>
-            </div>
-
-            <!-- Users table -->
-            <div class="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-              <div class="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
-                <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">All Users</h3>
-                <button type="button" id="users-refresh" class="text-xs text-indigo-600 hover:underline dark:text-indigo-400">Refresh</button>
-              </div>
-              <div class="log-scroll overflow-x-auto">
-                <table class="min-w-full text-left text-sm">
-                  <thead class="border-b border-slate-200 bg-slate-50/80 dark:border-slate-800 dark:bg-slate-800/30">
-                    <tr>
-                      <th class="whitespace-nowrap px-5 py-3 font-semibold text-slate-700 dark:text-slate-300">User</th>
-                      <th class="whitespace-nowrap px-5 py-3 font-semibold text-slate-700 dark:text-slate-300">Email</th>
-                      <th class="whitespace-nowrap px-5 py-3 font-semibold text-slate-700 dark:text-slate-300">Joined</th>
-                      <th class="whitespace-nowrap px-5 py-3 font-semibold text-slate-700 dark:text-slate-300">Role</th>
-                      <th class="whitespace-nowrap px-5 py-3 font-semibold text-slate-700 dark:text-slate-300">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody id="users-body" class="divide-y divide-slate-100 dark:divide-slate-800">
-                    <tr><td colspan="5" class="px-5 py-8 text-center text-sm text-slate-400">Loading…</td></tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            <!-- Non-admin fallback -->
-            <div id="users-no-access" class="hidden rounded-2xl border border-amber-200/80 bg-amber-50 px-5 py-8 text-center dark:border-amber-800/30 dark:bg-amber-950/20">
-              <p class="text-sm font-medium text-amber-700 dark:text-amber-300">You need the Admin role to manage users.</p>
-              <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">Contact your system administrator to request elevated access.</p>
-            </div>
+              <div><button type="button" class="btn btn-primary btn-lg" id="rp-download"><svg class="icon"><use href="#i-download" /></svg>Download report</button></div>
+            </section>
           </section>
 
         </main>
-
-        <footer class="border-t border-slate-200/80 px-6 py-4 text-center text-xs text-slate-500 dark:border-slate-800 dark:text-slate-500">
-          <div class="footer-brand">
-            <span class="brand-mark-shell brand-mark-shell--footer" aria-hidden="true">
-              <img src="assets/logsight-logo.png?v=20260330c" alt="" class="brand-mark-image" />
-            </span>
-            <span>LogSight — Final Year Project · Web-Based Log Analytics &amp; Visualization</span>
-          </div>
-        </footer>
       </div>
     </div>
 
+    <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-    <script src="js/api.js?v=20261008-v7"></script>
-    <script src="js/charts.js?v=20261008-v7"></script>
-    <script src="js/app.js?v=20261008-v7"></script>
+    <script src="/js/api.js?v=8.3"></script>
+    <script src="/js/charts.js?v=8.3"></script>
+    <script src="/js/app.js?v=8.3"></script>
   </body>
 </html>
