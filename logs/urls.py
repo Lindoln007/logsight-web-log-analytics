@@ -78,8 +78,7 @@ urlpatterns = [
     # ------------------------------------------------------------------
     path(
         "datasets/<int:dataset_id>/forecast/",
-        views.next_semester_redirect,
-        {"module_slug": "forecasting"},
+        views.forecast_view,
         name="forecast",
     ),
 
@@ -88,8 +87,7 @@ urlpatterns = [
     # ------------------------------------------------------------------
     path(
         "datasets/<int:dataset_id>/anomalies/",
-        views.next_semester_redirect,
-        {"module_slug": "anomalies"},
+        views.anomaly_detection_view,
         name="anomalies",
     ),
 

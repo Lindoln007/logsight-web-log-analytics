@@ -128,10 +128,11 @@ class LogEntry(models.Model):
     status_code = models.SmallIntegerField(
         help_text="HTTP response status code (e.g. 200, 404, 500)."
     )
-    ip_address = models.GenericIPAddressField(
-        protocol="both",
-        unpack_ipv4=True,
-        help_text="Client IP address (IPv4 or IPv6).",
+    # CharField rather than GenericIPAddressField: access logs with reverse-DNS
+    # lookups enabled record client hostnames here, which an inet column rejects.
+    ip_address = models.CharField(
+        max_length=255,
+        help_text="Client address from the log line (IPv4, IPv6, or hostname).",
     )
     referrer = models.TextField(
         null=True,
@@ -152,12 +153,12 @@ class LogEntry(models.Model):
     class Meta:
         ordering = ["-timestamp"]
         indexes = [
-            # Single-column indexes for common filter/sort operations.
+            # Every analytics query is scoped to one dataset, so only the
+            # dataset-prefixed compound indexes below are used.  Single-column
+            # indexes on status_code / ip_address / endpoint / error_flag were
+            # removed: they were never chosen by the planner and roughly
+            # doubled the cost of every bulk insert during parsing.
             models.Index(fields=["timestamp"], name="logentry_timestamp_idx"),
-            models.Index(fields=["status_code"], name="logentry_status_code_idx"),
-            models.Index(fields=["ip_address"], name="logentry_ip_address_idx"),
-            models.Index(fields=["endpoint"], name="logentry_endpoint_idx"),
-            models.Index(fields=["error_flag"], name="logentry_error_flag_idx"),
             # Compound indexes for the most frequent analytics queries:
             # "all entries for a dataset ordered by time"
             models.Index(

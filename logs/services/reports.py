@@ -138,6 +138,10 @@ def generate_json_report(dataset_id: int, owner, dataset_name: str = "") -> dict
     )
     from logs.services.anomaly_detection import get_anomalies
 
+    anomalies = get_anomalies(dataset_id, owner=owner)
+    # The hourly chart series is only needed by the Anomaly Detection page.
+    anomalies.pop("historical_series", None)
+
     return {
         "report_generated_at": timezone.now().isoformat(),
         "dataset_id":          dataset_id,
@@ -146,5 +150,5 @@ def generate_json_report(dataset_id: int, owner, dataset_name: str = "") -> dict
         "top_endpoints":       get_top_endpoints(dataset_id, owner=owner, limit=20),
         "status_distribution": get_status_distribution(dataset_id, owner=owner),
         "error_breakdown":     get_error_breakdown(dataset_id, owner=owner),
-        "anomalies":           get_anomalies(dataset_id, owner=owner),
+        "anomalies":           anomalies,
     }

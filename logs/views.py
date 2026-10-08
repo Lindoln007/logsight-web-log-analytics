@@ -547,7 +547,7 @@ def forecast_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
     Query parameters
     ----------------
     periods : int   — number of future hours to forecast (default 24, max 168)
-    method  : str   — "moving_avg" (default) | "linear_regression"
+    method  : str   — "moving_avg" (default) | "linear_regression" | "ml"
     """
     dataset = _get_user_dataset(request, dataset_id)
     error = _dataset_ready_or_error(dataset)
@@ -556,7 +556,7 @@ def forecast_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
 
     periods = min(_parse_int_param(request, "periods", 24), 168)
     method  = request.GET.get("method", "moving_avg")
-    if method not in ("moving_avg", "linear_regression"):
+    if method not in ("moving_avg", "linear_regression", "ml"):
         method = "moving_avg"
 
     data = get_traffic_forecast(dataset_id, owner=request.user, periods=periods, method=method)
@@ -574,11 +574,12 @@ def anomaly_detection_view(request: HttpRequest, dataset_id: int) -> JsonRespons
     """
     GET /logs/datasets/<id>/anomalies/
 
-    Detect statistical anomalies in request frequency and error rates.
+    Detect anomalous hours in request frequency and error rates.
 
     Query parameters
     ----------------
     sensitivity : "low" | "medium" (default) | "high"
+    method      : "statistical" (default) | "isolation_forest"
     """
     dataset = _get_user_dataset(request, dataset_id)
     error = _dataset_ready_or_error(dataset)
@@ -589,7 +590,13 @@ def anomaly_detection_view(request: HttpRequest, dataset_id: int) -> JsonRespons
     if sensitivity not in ("low", "medium", "high"):
         sensitivity = "medium"
 
-    data = get_anomalies(dataset_id, owner=request.user, sensitivity=sensitivity)
+    method = request.GET.get("method", "statistical")
+    if method not in ("statistical", "isolation_forest"):
+        method = "statistical"
+
+    data = get_anomalies(
+        dataset_id, owner=request.user, sensitivity=sensitivity, method=method
+    )
     return JsonResponse(data, status=200)
 
 

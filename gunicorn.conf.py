@@ -11,6 +11,7 @@ Usage:
 """
 
 import multiprocessing
+import os
 
 # ---------------------------------------------------------------------------
 # Worker configuration
@@ -19,8 +20,11 @@ import multiprocessing
 # sync workers are fine: each request returns quickly (202 for uploads).
 worker_class = "sync"
 
-# 2–4 × CPU cores is the standard recommendation for sync workers.
-workers = multiprocessing.cpu_count() * 2 + 1
+# 2–4 × CPU cores is the standard recommendation for sync workers, but
+# cpu_count() reports the host's cores on shared hosting, which can start far
+# more workers than the instance has memory for.  Honour WEB_CONCURRENCY (set
+# by Render and most PaaS hosts) and otherwise cap the default.
+workers = int(os.environ.get("WEB_CONCURRENCY") or min(multiprocessing.cpu_count() * 2 + 1, 4))
 
 # Worker timeout in seconds.  Since uploads return 202 immediately and parsing
 # runs in a background thread, 120 s is more than enough even for slow networks

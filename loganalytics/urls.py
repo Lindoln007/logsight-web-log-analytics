@@ -23,6 +23,11 @@ def serve_frontend_index(request):
     if user_role == "pending":
         return render(request, "accounts/pending.html")
 
+    # Load the ML libraries in the background while the user is on the
+    # dashboard, so the first forecast / anomaly run does not wait for them.
+    from logs.services.ml_runtime import warm_up
+    warm_up()
+
     return render(request, "logs/app_shell.html", {"user_role": user_role})
 
 

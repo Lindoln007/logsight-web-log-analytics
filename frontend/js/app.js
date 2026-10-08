@@ -10,8 +10,6 @@
                       "forecast", "anomalies", "alerts", "reports",
                       "security", "compare", "search", "simulate", "users"];
   var unavailableRoutes = {
-    forecast: "forecasting",
-    anomalies: "anomalies",
     alerts: "alerts",
     security: "security-insights",
     simulate: "live-ingestion",
@@ -21,6 +19,7 @@
   var viewerPage             = 1;
   var viewerSearchDebounce;
   var pendingViewerDatasetId = "";
+  var dashboardReady         = false;
 
   // -------------------------------------------------------------------------
   // DOM helpers
@@ -221,8 +220,6 @@
   }
 
   function showView(route) {
-    // Destroy dashboard charts when leaving dashboard.
-    if (route !== "dashboard" && typeof LogSightCharts !== "undefined") LogSightCharts.destroyAll();
     $all("[data-view]").forEach(function (section) {
       var on = section.getAttribute("data-view") === route;
       section.classList.toggle("hidden", !on);
@@ -260,7 +257,7 @@
       return;
     }
     showView(route);
-    if (route === "dashboard")  loadDashboardData();
+    if (route === "dashboard" && !dashboardReady) loadDashboardData();
     if (route === "datasets")   loadDatasetsTable();
     if (route === "viewer")     initLogViewer();
     if (route === "forecast")   initForecastView();
@@ -409,6 +406,7 @@
       renderStatValue("stat-latency",  null, "", "—");
       renderStatValue("stat-visitors", null, "", "—");
       if (typeof LogSightCharts !== "undefined") LogSightCharts.destroyAll();
+      dashboardReady = true;
       return;
     }
 
@@ -445,6 +443,7 @@
     }
 
     loadDashboardCharts(id, filter);
+    dashboardReady = true;
   }
 
   async function loadDashboardCharts(datasetId, filter) {
@@ -510,13 +509,8 @@
     }
 
     try {
-      var result = await fetch(
-        "/logs/datasets/" + encodeURIComponent(datasetId) + "/analytics/summary/",
-        { credentials: "same-origin" }
-      );
-      if (!result.ok) return;
-      var data = await result.json();
-      var dr   = data.date_range || {};
+      var summary = await LogSightAPI.getDashboardSummary(datasetId);
+      var dr = summary.dateRange || {};
       if (!dr.start || !dr.end) return;
 
       // ISO → YYYY-MM-DD (works for both offset-aware and naive timestamps).
@@ -546,6 +540,7 @@
       select._bound = true;
       select.addEventListener("change", function () {
         LogSightAPI.setCurrentDataset(select.value || null);
+        dashboardReady = false;
         setDashboardDateConstraints(select.value || null);
         loadDashboardData();
       });
@@ -560,6 +555,7 @@
         refreshBtn.disabled = true;
         refreshBtn.textContent = "Refreshing…";
         try { await LogSightAPI.refreshAnalytics(id); } catch (_) {}
+        dashboardReady = false;
         refreshBtn.disabled = false;
         refreshBtn.innerHTML =
           '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
@@ -629,8 +625,12 @@
       var statusEl = $(".upload-status", row);
 
       LogSightAPI.uploadDataset(file, {
-        onProgress: function () {
-          if (statusEl) statusEl.textContent = "Parsing… this may take a moment for large files.";
+        onProgress: function (status) {
+          if (!statusEl) return;
+          var done = status && Number(status.total_entries);
+          statusEl.textContent = done
+            ? "Parsing… " + done.toLocaleString() + " entries so far"
+            : "Parsing… this may take a moment for large files.";
         },
       }).then(function (dataset) {
         var shimmer = $(".progress-shimmer", row);
@@ -973,6 +973,8 @@
           if (!desc) return;
           if (methodSel.value === "linear_regression") {
             desc.innerHTML = '<strong>Linear Regression:</strong> Fits a straight line to all historical hourly data using ordinary least squares, then extrapolates forward. Best for showing a clean overall trend direction.';
+          } else if (methodSel.value === "ml") {
+            desc.innerHTML = '<strong>Machine Learning (Random Forest):</strong> Trains a model on this dataset\'s own history. For every past hour it learns from the hour of day, the day of week, and the traffic 1, 2, 3 and 24 hours earlier, then predicts forward one hour at a time. The shaded band comes from how much the model\'s 100 decision trees disagree. Needs at least 3 days of data.';
           } else {
             desc.innerHTML = '<strong>Seasonal Pattern:</strong> Averages traffic per hour-of-day across the full dataset history, then projects those daily rhythms forward with a trend adjustment. Produces realistic peaks and troughs rather than a flat line.';
           }
@@ -1030,6 +1032,14 @@
       if (empty) empty.classList.add("hidden");
       if (wrap)  { wrap.classList.remove("hidden"); }
 
+      // Explain when the server had to use a different method than requested.
+      var noteEl = $("#forecast-note");
+      if (noteEl) {
+        noteEl.textContent = data.note || "";
+        noteEl.classList.toggle("hidden", !data.note);
+      }
+      renderForecastEvaluation(data.evaluation, data.method);
+
       requestAnimationFrame(function () {
         LogSightCharts.renderForecastChart("chart-forecast", data);
       });
@@ -1045,6 +1055,42 @@
     }
   }
 
+  // Back-test table: every method forecasts the hidden last part of the history
+  // and is scored against what really happened.
+  function renderForecastEvaluation(evaluation, usedMethod) {
+    var card = $("#forecast-evaluation");
+    var rows = $("#forecast-evaluation-rows");
+    var desc = $("#forecast-evaluation-desc");
+    if (!card || !rows) return;
+
+    var results = evaluation && Array.isArray(evaluation.results) ? evaluation.results : [];
+    if (!results.length) { card.classList.add("hidden"); return; }
+
+    if (desc) {
+      desc.textContent =
+        "The last " + evaluation.holdout_hours + " hours were hidden, each method predicted them from the " +
+        evaluation.training_hours + " hours before, and the predictions were compared with what really happened " +
+        "(real average: " + Number(evaluation.mean_actual).toLocaleString() + " requests/hour). Lower error is better.";
+    }
+
+    rows.innerHTML = "";
+    results.forEach(function (r) {
+      var isBest = r.method === evaluation.best_method;
+      var isUsed = r.method === usedMethod;
+      var tr = document.createElement("tr");
+      if (isUsed) tr.className = "bg-indigo-50/60 dark:bg-indigo-950/20";
+      tr.innerHTML =
+        '<td class="px-5 py-3 font-medium text-slate-800 dark:text-slate-200">' + escapeHtml(r.label) +
+          (isUsed ? ' <span class="ml-1 text-xs font-normal text-indigo-600 dark:text-indigo-400">· shown above</span>' : "") +
+          (isBest ? ' <span class="ml-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">most accurate</span>' : "") +
+        "</td>" +
+        '<td class="px-5 py-3 text-right tabular-nums text-slate-700 dark:text-slate-300">' + Number(r.mae).toLocaleString() + "</td>" +
+        '<td class="px-5 py-3 text-right tabular-nums text-slate-700 dark:text-slate-300">' + Number(r.rmse).toLocaleString() + "</td>";
+      rows.appendChild(tr);
+    });
+    card.classList.remove("hidden");
+  }
+
   // -------------------------------------------------------------------------
   // Anomaly Detection view
   // -------------------------------------------------------------------------
@@ -1054,6 +1100,18 @@
   async function initAnomalyView() {
     if (!anomalyInitDone) {
       anomalyInitDone = true;
+      var anomalyMethodSel = $("#anomaly-method");
+      if (anomalyMethodSel) {
+        anomalyMethodSel.addEventListener("change", function () {
+          var desc = $("#anomaly-method-desc");
+          if (!desc) return;
+          if (anomalyMethodSel.value === "isolation_forest") {
+            desc.innerHTML = '<strong>Isolation Forest (AI):</strong> A machine-learning model trained on this dataset. Each hour is described by its request count, error rate, number of unique visitors, average response size, requests per visitor and time of day. The model learns what a normal hour looks like and flags the hours that are easiest to separate from the rest, including hours that are only unusual in combination. Needs at least 24 hours of data.';
+          } else {
+            desc.innerHTML = '<strong>Statistical threshold:</strong> Works out the average request count and error rate per hour, then flags any hour that sits far above that average. Each measure is checked on its own.';
+          }
+        });
+      }
     }
     await populateSelect("anomaly-dataset");
 
@@ -1077,9 +1135,18 @@
     if (runBtn) { runBtn.disabled = true; runBtn.textContent = "Detecting…"; }
 
     try {
+      var methodSel = $("#anomaly-method");
       var data = await LogSightAPI.getAnomalies(dsSelect.value, {
         sensitivity: sensSel ? sensSel.value : "medium",
+        method: methodSel ? methodSel.value : "statistical",
       });
+
+      // Explain when the server had to use a different method than requested.
+      var noteEl = $("#anomaly-note");
+      if (noteEl) {
+        noteEl.textContent = data.note || "";
+        noteEl.classList.toggle("hidden", !data.note);
+      }
 
       var summary = data.summary || {};
       var cards   = $("#anomaly-summary-cards");
@@ -1110,8 +1177,12 @@
         }
       }
 
-      // Filter to request_spike anomalies for the chart overlay.
-      var requestAnomalies = (data.anomalies || []).filter(function (a) { return a.type === "request_spike"; });
+      // The statistical method marks request spikes only (its error-rate
+      // findings are listed below); the Isolation Forest scores whole hours,
+      // so every flagged hour is marked on the chart.
+      var requestAnomalies = (data.anomalies || []).filter(function (a) {
+        return data.method === "isolation_forest" || a.type === "request_spike";
+      });
 
       requestAnimationFrame(function () {
         LogSightCharts.renderAnomalyChart("chart-anomalies", historicalData, requestAnomalies);
@@ -1181,7 +1252,12 @@
     wrap.classList.remove("hidden");
     list.innerHTML = "";
 
-    var typeLabels = { request_spike: "Traffic spike", error_rate_spike: "Error spike" };
+    var typeLabels = {
+      request_spike: "Traffic spike",
+      error_rate_spike: "Error spike",
+      traffic_drop: "Traffic drop",
+      unusual_pattern: "Unusual pattern",
+    };
 
     anomalies.forEach(function (a) {
       var typeLabel = typeLabels[a.type] || a.type;
@@ -1450,6 +1526,7 @@
         filterRow.classList.add("hidden");
         filterRow.classList.remove("flex");
         if (activeDot) activeDot.classList.add("hidden");
+        dashboardReady = false;
         loadDashboardData();
       });
     }
@@ -1464,6 +1541,7 @@
           toIn.min = _dashDateMin;
         }
         _updateFilterDot();
+        dashboardReady = false;
         loadDashboardData();
       });
     }
@@ -1478,6 +1556,7 @@
           fromIn.max = _dashDateMax;
         }
         _updateFilterDot();
+        dashboardReady = false;
         loadDashboardData();
       });
     }

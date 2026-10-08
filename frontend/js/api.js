@@ -91,6 +91,8 @@
   // ---------------------------------------------------------------------------
 
   let _currentDatasetId = null;
+  const _responseCache = new Map();
+  const RESPONSE_CACHE_TTL_MS = 30 * 1000;
 
   // ---------------------------------------------------------------------------
   // HTTP helpers
@@ -133,6 +135,30 @@
     } catch (_) {
       return { ok: false, status: 0, missing: true, data: null };
     }
+  }
+
+  async function fetchCachedJson(cacheKey, url, options) {
+    var now = Date.now();
+    var cached = _responseCache.get(cacheKey);
+    if (cached && now - cached.createdAt < RESPONSE_CACHE_TTL_MS) return cached.value;
+
+    var value = cached && cached.value && typeof cached.value.then === "function"
+      ? cached.value
+      : fetchJson(url, options);
+    _responseCache.set(cacheKey, { createdAt: now, value: value });
+
+    var result = await value;
+    if (!result.ok) _responseCache.delete(cacheKey);
+    else if (_responseCache.get(cacheKey) && _responseCache.get(cacheKey).value === value) {
+      _responseCache.set(cacheKey, { createdAt: Date.now(), value: result });
+    }
+    return result;
+  }
+
+  function clearResponseCache(prefix) {
+    _responseCache.forEach(function (_, key) {
+      if (!prefix || key.indexOf(prefix) === 0) _responseCache.delete(key);
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -290,7 +316,7 @@
     },
 
     async listDatasets() {
-      var result = await fetchJson(config.api.datasets, { method: "GET" });
+      var result = await fetchCachedJson("datasets", config.api.datasets, { method: "GET" });
       if (!result.ok || !result.data) return [];
       var datasets = Array.isArray(result.data.datasets) ? result.data.datasets : [];
       return datasets.map(normalizeDataset);
@@ -309,6 +335,7 @@
       }
 
       var dataset = normalizeDataset(result.data.dataset);
+      clearResponseCache("datasets");
 
       // 202 Accepted means the file was saved and parsing is running in the
       // background.  Poll until the dataset reaches a terminal status.
@@ -331,17 +358,18 @@
      * Resolves with a normalised dataset object when status reaches "completed".
      * Rejects with an Error if:
      *   - status reaches "failed"  (error message from server is included)
-     *   - maxAttempts is exhausted (default: 4 minutes at 1-second intervals)
+     *   - the dataset is still not finished after 30 minutes
      *
      * @param {string}   datasetId
      * @param {Function} [onProgress]  called with the current status object on each tick
      */
     async pollDatasetUntilComplete(datasetId, onProgress) {
-      var maxAttempts = 240;  // 4 minutes at 1 s intervals
-      var intervalMs  = 1000;
-      var statusUrl   = "/logs/datasets/" + encodeURIComponent(datasetId) + "/status/";
+      var deadline  = Date.now() + 30 * 60 * 1000;
+      var statusUrl = "/logs/datasets/" + encodeURIComponent(datasetId) + "/status/";
 
-      for (var i = 0; i < maxAttempts; i++) {
+      for (var i = 0; Date.now() < deadline; i++) {
+        // Poll every second at first, then ease off for long-running parses.
+        var intervalMs = i < 30 ? 1000 : 2500;
         await new Promise(function (resolve) { setTimeout(resolve, intervalMs); });
 
         var result = await fetchJson(statusUrl, { method: "GET" });
@@ -390,6 +418,7 @@
       if (!result.ok) throw new Error("Dataset deletion failed.");
       // Clear current dataset state if the deleted one was active
       if (_currentDatasetId === String(datasetId)) _currentDatasetId = null;
+      clearResponseCache("datasets");
       return result.data || { deleted: true };
     },
 
@@ -403,7 +432,7 @@
       var id = datasetId || _currentDatasetId;
       if (!id) return emptyDashboardSummary();
 
-      var result = await fetchJson(analyticsUrl(id, "summary"), { method: "GET" });
+      var result = await fetchCachedJson("summary:" + id, analyticsUrl(id, "summary"), { method: "GET" });
       if (!result.ok || !result.data) return emptyDashboardSummary();
 
       var d = result.data;
@@ -421,6 +450,7 @@
         uniqueVisitors: d.unique_ips != null ? d.unique_ips : null,
         periodLabel: formatDateRange(dr.start, dr.end),
         durationHours: dr.duration_hours || null,
+        dateRange: dr,
       };
     },
 
@@ -439,7 +469,7 @@
         "&limit="    + encodeURIComponent(limit) +
         _dateQs(params, true);
 
-      var result = await fetchJson(url, { method: "GET" });
+      var result = await fetchCachedJson("trends:" + id + ":" + url, url, { method: "GET" });
       if (!result.ok || !result.data || !Array.isArray(result.data.data)) {
         return emptyRequestFrequency();
       }
@@ -471,7 +501,7 @@
       if (!id) return emptyStatusDistribution();
 
       var url = analyticsUrl(id, "status-distribution") + _dateQs(opts);
-      var result = await fetchJson(url, { method: "GET" });
+      var result = await fetchCachedJson("status:" + id + ":" + url, url, { method: "GET" });
       if (!result.ok || !result.data) return emptyStatusDistribution();
 
       var categories = result.data.by_category || {};
@@ -504,7 +534,7 @@
 
       var n   = limit || 10;
       var url = analyticsUrl(id, "top-endpoints") + "?limit=" + encodeURIComponent(n) + _dateQs(opts, true);
-      var result = await fetchJson(url, { method: "GET" });
+      var result = await fetchCachedJson("endpoints:" + id + ":" + url, url, { method: "GET" });
       if (!result.ok || !result.data) return emptyTopEndpoints();
 
       var endpoints = Array.isArray(result.data.endpoints) ? result.data.endpoints : [];
@@ -530,7 +560,7 @@
       if (!id) return emptyTrafficPattern();
 
       var url = analyticsUrl(id, "hourly-traffic") + _dateQs(opts);
-      var result = await fetchJson(url, { method: "GET" });
+      var result = await fetchCachedJson("hourly:" + id + ":" + url, url, { method: "GET" });
       if (!result.ok || !result.data || !Array.isArray(result.data.traffic)) {
         return emptyTrafficPattern();
       }
@@ -579,6 +609,11 @@
 
       var result = await fetchJson(analyticsUrl(id, "refresh"), { method: "POST" });
       if (!result.ok) throw new Error("Analytics refresh failed.");
+      clearResponseCache("summary:" + id);
+      clearResponseCache("trends:" + id);
+      clearResponseCache("status:" + id);
+      clearResponseCache("endpoints:" + id);
+      clearResponseCache("hourly:" + id);
       return result.data || { refreshed: true };
     },
 
@@ -654,8 +689,10 @@
       if (!id) return { available: false, anomalies: [], summary: { total_anomalies: 0 } };
 
       var sensitivity = (params && params.sensitivity) || "medium";
+      var method = (params && params.method) || "statistical";
       var url = "/logs/datasets/" + encodeURIComponent(id) + "/anomalies/" +
-        "?sensitivity=" + encodeURIComponent(sensitivity);
+        "?sensitivity=" + encodeURIComponent(sensitivity) +
+        "&method=" + encodeURIComponent(method);
 
       var result = await fetchJson(url, { method: "GET" });
       if (!result.ok || !result.data) {
@@ -755,7 +792,8 @@
       var qs = "";
       if (dateFrom) qs += "?date_from=" + encodeURIComponent(dateFrom);
       if (dateTo)   qs += (qs ? "&" : "?") + "date_to=" + encodeURIComponent(dateTo);
-      var result = await fetchJson("/logs/datasets/" + encodeURIComponent(id) + "/analytics/filtered-summary/" + qs);
+      var url = "/logs/datasets/" + encodeURIComponent(id) + "/analytics/filtered-summary/" + qs;
+      var result = await fetchCachedJson("filtered-summary:" + id + ":" + qs, url);
       if (!result.ok) throw new Error("Filtered summary failed.");
       return result.data;
     },

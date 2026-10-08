@@ -1,25 +1,43 @@
 """
 Anomaly detection service.
 
-Detects two classes of anomaly per hourly time-bucket:
-  1. Request-volume spikes  — hours where request count is far above the mean.
-  2. Error-rate spikes      — hours where the fraction of failed requests is
-                             far above the mean error rate.
+Two interchangeable detection methods work on the same hourly time-buckets:
 
-Method: mean ± k·σ (standard deviation) thresholding — simple, transparent,
-and straightforward to explain in an academic context.  The caller controls
-sensitivity via *k*:
-  low    → k = 3.0  (only extreme outliers flagged)
-  medium → k = 2.0  (moderate outliers)
-  high   → k = 1.5  (more sensitive, more false-positives)
+``statistical``  — mean ± k·σ thresholding (the original method).
+    Looks at one metric at a time and flags:
+      1. Request-volume spikes  — hours where request count is far above the mean.
+      2. Error-rate spikes      — hours where the fraction of failed requests is
+                                  far above the mean error rate.
+    Simple, transparent, and straightforward to explain.  Sensitivity sets *k*:
+      low    → k = 3.0  (only extreme outliers flagged)
+      medium → k = 2.0  (moderate outliers)
+      high   → k = 1.5  (more sensitive, more false-positives)
+
+``isolation_forest``  — unsupervised machine learning (scikit-learn).
+    Each hour becomes one row of features (request count, error rate, unique
+    visitors, average response size, requests per visitor, hour of day).  An
+    Isolation Forest is trained on the uploaded dataset itself — no labels and
+    no pre-trained model — and scores how easily each hour can be separated
+    from the rest.  Because it looks at all features together it also catches
+    hours that are unusual only *in combination* (e.g. normal volume, but from
+    two visitors and mostly errors), which single-metric thresholds miss.
 """
 from __future__ import annotations
 
+import logging
 import math
 
-from django.db.models import Count, Q
+from django.core.cache import cache
+from django.db.models import Avg, Count, Q
 from django.db.models.functions import TruncHour
 
+logger = logging.getLogger(__name__)
+
+HOURLY_CACHE_TTL = 15 * 60
+
+METHOD_STATISTICAL = "statistical"
+METHOD_ISOLATION_FOREST = "isolation_forest"
+METHODS = (METHOD_STATISTICAL, METHOD_ISOLATION_FOREST)
 
 SENSITIVITY_K: dict[str, float] = {
     "low":    3.0,
@@ -30,6 +48,21 @@ SENSITIVITY_K: dict[str, float] = {
 # Minimum number of hourly buckets required before running detection.
 MIN_BUCKETS = 3
 
+# The Isolation Forest needs enough hours to learn what "normal" looks like.
+MIN_BUCKETS_ISOLATION_FOREST = 24
+
+# Isolation Forest decision scores are centred on 0: the more negative, the
+# easier the hour was to isolate.  An hour is flagged when its score falls
+# below the cut-off for the chosen sensitivity.  Cut-offs were calibrated on
+# real access logs so that "medium" flags roughly the most unusual 3 % of hours
+# in a noisy log and nothing at all in a uniformly quiet one.
+ISOLATION_FOREST_CUTOFF: dict[str, float] = {
+    "low":    -0.12,
+    "medium": -0.08,
+    "high":   -0.05,
+}
+ISOLATION_FOREST_TREES = 200
+
 
 # ---------------------------------------------------------------------------
 # Public entry point
@@ -39,6 +72,7 @@ def get_anomalies(
     dataset_id: int,
     owner,
     sensitivity: str = "medium",
+    method: str = METHOD_STATISTICAL,
 ) -> dict:
     """
     Detect anomalous hours in *dataset_id*'s log data.
@@ -48,15 +82,17 @@ def get_anomalies(
     {
         "anomalies": [
             {
-                "type":        "request_spike" | "error_rate_spike",
+                "type":        "request_spike" | "error_rate_spike"
+                               | "traffic_drop" | "unusual_pattern",
                 "timestamp":   ISO-8601 str,
                 "label":       human-readable label,
                 "value":       float,          # measured value
-                "threshold":   float,          # upper bound (mean + k*σ)
+                "threshold":   float,          # upper bound / score cut-off
                 "mean":        float,
                 "std":         float,
                 "severity":    "high" | "medium" | "low",
                 "explanation": str,
+                "score":       float,          # isolation_forest only
             },
             ...
         ],
@@ -66,15 +102,54 @@ def get_anomalies(
             "medium_severity": int,
             "low_severity":    int,
         },
-        "sensitivity": str,
-        "k_factor":    float,
+        "sensitivity":       str,
+        "k_factor":          float,
+        "method":            method that actually ran,
+        "requested_method":  method the caller asked for,
+        "note":              str | None,   # set when a fallback happened
+        "historical_series": [{"label", "value"}, ...],   # hourly request counts
     }
     """
-    k = SENSITIVITY_K.get(sensitivity, 2.0)
+    if sensitivity not in SENSITIVITY_K:
+        sensitivity = "medium"
+    if method not in METHODS:
+        method = METHOD_STATISTICAL
+    k = SENSITIVITY_K[sensitivity]
 
-    anomalies: list[dict] = []
-    anomalies.extend(_detect_request_spikes(dataset_id, owner, k))
-    anomalies.extend(_detect_error_rate_spikes(dataset_id, owner, k))
+    hours = _hourly_buckets(dataset_id, owner)
+
+    used_method = method
+    note = None
+    model_info = None
+    anomalies: list[dict] | None = None
+
+    if method == METHOD_ISOLATION_FOREST:
+        if len(hours) < MIN_BUCKETS_ISOLATION_FOREST:
+            note = (
+                f"Isolation Forest needs at least {MIN_BUCKETS_ISOLATION_FOREST} hours of "
+                f"data to learn a baseline; this dataset has {len(hours)}. "
+                "Showing the statistical method instead."
+            )
+        else:
+            try:
+                anomalies, model_info = _detect_with_isolation_forest(hours, sensitivity)
+            except ImportError:
+                note = (
+                    "scikit-learn is not installed on the server, so the "
+                    "statistical method was used instead."
+                )
+            except Exception:
+                logger.exception("Isolation Forest failed for dataset_id=%s", dataset_id)
+                note = (
+                    "The Isolation Forest model could not be fitted to this "
+                    "dataset, so the statistical method was used instead."
+                )
+
+    if anomalies is None:
+        used_method = METHOD_STATISTICAL
+        anomalies = []
+        anomalies.extend(_detect_request_spikes(hours, k))
+        anomalies.extend(_detect_error_rate_spikes(hours, k))
 
     # Stable sort by timestamp so anomalies appear chronologically in the UI.
     anomalies.sort(key=lambda a: a.get("timestamp", ""))
@@ -91,68 +166,48 @@ def get_anomalies(
             "medium_severity": medium,
             "low_severity":    low,
         },
-        "sensitivity": sensitivity,
-        "k_factor":    k,
+        "sensitivity":      sensitivity,
+        "k_factor":         k,
+        "method":           used_method,
+        "requested_method": method,
+        "note":             note,
+        "model":            model_info,
+        "historical_series": [
+            {"label": _label(h["hour"]), "value": h["total"]} for h in hours
+        ],
     }
 
 
 # ---------------------------------------------------------------------------
-# Detection helpers
+# Shared hourly aggregation
 # ---------------------------------------------------------------------------
 
-def _detect_request_spikes(dataset_id: int, owner, k: float) -> list[dict]:
-    """Flag hours whose request count is more than k standard deviations above the mean."""
-    from logs.models import LogEntry  # local import avoids circular deps
+def _hourly_buckets(dataset_id: int, owner) -> list[dict]:
+    """
+    Return one row per hour that contains at least one request::
 
-    items = list(
-        LogEntry.objects
-        .filter(dataset_id=dataset_id, dataset__owner=owner)
-        .annotate(hour=TruncHour("timestamp"))
-        .values("hour")
-        .annotate(count=Count("id"))
-        .order_by("hour")
+        {"hour": datetime, "total": int, "errors": int,
+         "unique_ips": int, "avg_size": float | None}
+
+    A single GROUP BY query feeds both detection methods.  The result is cached
+    briefly so that re-running with another method or sensitivity is instant.
+    """
+    from logs.models import Dataset, LogEntry  # local import avoids circular deps
+
+    # total_entries changes whenever rows are added, which retires the old key.
+    total_entries = (
+        Dataset.objects.filter(pk=dataset_id, owner=owner)
+        .values_list("total_entries", flat=True)
+        .first()
     )
-
-    if len(items) < MIN_BUCKETS:
+    if total_entries is None:
         return []
+    cache_key = f"anomalies:hourly:{dataset_id}:{total_entries}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
 
-    counts = [item["count"] for item in items]
-    mean, std = _mean_std(counts)
-    if std == 0:
-        return []
-
-    upper = mean + k * std
-    anomalies: list[dict] = []
-
-    for item in items:
-        c = item["count"]
-        if c > upper:
-            deviation = (c - mean) / std
-            severity  = _severity_from_deviation(deviation, k)
-            h = item["hour"]
-            anomalies.append({
-                "type":        "request_spike",
-                "timestamp":   h.isoformat() if h else "",
-                "label":       h.strftime("%b %d %H:%M") if h else "",
-                "value":       c,
-                "threshold":   round(upper, 1),
-                "mean":        round(mean, 1),
-                "std":         round(std, 1),
-                "severity":    severity,
-                "explanation": (
-                    f"Request count {c:,} exceeded the upper threshold "
-                    f"{upper:,.0f} ({k:.1f}\u03c3 above mean {mean:.0f})"
-                ),
-            })
-
-    return anomalies
-
-
-def _detect_error_rate_spikes(dataset_id: int, owner, k: float) -> list[dict]:
-    """Flag hours whose error rate (%) is more than k standard deviations above the mean."""
-    from logs.models import LogEntry
-
-    items = list(
+    rows = (
         LogEntry.objects
         .filter(dataset_id=dataset_id, dataset__owner=owner)
         .annotate(hour=TruncHour("timestamp"))
@@ -160,17 +215,67 @@ def _detect_error_rate_spikes(dataset_id: int, owner, k: float) -> list[dict]:
         .annotate(
             total=Count("id"),
             errors=Count("id", filter=Q(error_flag=True)),
+            unique_ips=Count("ip_address", distinct=True),
+            avg_size=Avg("response_size"),
         )
         .order_by("hour")
     )
+    buckets = [row for row in rows if row["hour"] is not None and row["total"] > 0]
+    cache.set(cache_key, buckets, HOURLY_CACHE_TTL)
+    return buckets
 
-    if len(items) < MIN_BUCKETS:
+
+def _label(hour) -> str:
+    return hour.strftime("%b %d %H:%M") if hour else ""
+
+
+# ---------------------------------------------------------------------------
+# Statistical detection (mean ± k·σ)
+# ---------------------------------------------------------------------------
+
+def _detect_request_spikes(hours: list[dict], k: float) -> list[dict]:
+    """Flag hours whose request count is more than k standard deviations above the mean."""
+    if len(hours) < MIN_BUCKETS:
         return []
 
-    rates = [
-        (item["errors"] / item["total"] * 100.0) if item["total"] > 0 else 0.0
-        for item in items
-    ]
+    counts = [item["total"] for item in hours]
+    mean, std = _mean_std(counts)
+    if std == 0:
+        return []
+
+    upper = mean + k * std
+    anomalies: list[dict] = []
+
+    for item in hours:
+        c = item["total"]
+        if c > upper:
+            deviation = (c - mean) / std
+            severity  = _severity_from_deviation(deviation, k)
+            h = item["hour"]
+            anomalies.append({
+                "type":        "request_spike",
+                "timestamp":   h.isoformat() if h else "",
+                "label":       _label(h),
+                "value":       c,
+                "threshold":   round(upper, 1),
+                "mean":        round(mean, 1),
+                "std":         round(std, 1),
+                "severity":    severity,
+                "explanation": (
+                    f"Request count {c:,} exceeded the upper threshold "
+                    f"{upper:,.0f} ({k:.1f}σ above mean {mean:.0f})"
+                ),
+            })
+
+    return anomalies
+
+
+def _detect_error_rate_spikes(hours: list[dict], k: float) -> list[dict]:
+    """Flag hours whose error rate (%) is more than k standard deviations above the mean."""
+    if len(hours) < MIN_BUCKETS:
+        return []
+
+    rates = [_error_rate(item) for item in hours]
 
     mean, std = _mean_std(rates)
     if std == 0:
@@ -183,7 +288,7 @@ def _detect_error_rate_spikes(dataset_id: int, owner, k: float) -> list[dict]:
 
     anomalies: list[dict] = []
 
-    for idx, item in enumerate(items):
+    for idx, item in enumerate(hours):
         rate = rates[idx]
         if rate > upper:
             deviation = (rate - mean) / std
@@ -192,7 +297,7 @@ def _detect_error_rate_spikes(dataset_id: int, owner, k: float) -> list[dict]:
             anomalies.append({
                 "type":        "error_rate_spike",
                 "timestamp":   h.isoformat() if h else "",
-                "label":       h.strftime("%b %d %H:%M") if h else "",
+                "label":       _label(h),
                 "value":       round(rate, 2),
                 "threshold":   round(upper, 2),
                 "mean":        round(mean, 2),
@@ -200,7 +305,7 @@ def _detect_error_rate_spikes(dataset_id: int, owner, k: float) -> list[dict]:
                 "severity":    severity,
                 "explanation": (
                     f"Error rate {rate:.1f}% exceeded upper threshold "
-                    f"{upper:.1f}% ({k:.1f}\u03c3 above mean {mean:.1f}%)"
+                    f"{upper:.1f}% ({k:.1f}σ above mean {mean:.1f}%)"
                 ),
             })
 
@@ -208,8 +313,147 @@ def _detect_error_rate_spikes(dataset_id: int, owner, k: float) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Machine-learning detection (Isolation Forest)
+# ---------------------------------------------------------------------------
+
+# (key, label shown to the user, value formatter)
+_FEATURES = (
+    ("requests",        "requests",                lambda v: f"{v:,.0f}"),
+    ("error_rate",      "error rate",              lambda v: f"{v:.1f}%"),
+    ("unique_ips",      "unique visitors",         lambda v: f"{v:,.0f}"),
+    ("avg_size",        "average response size",   lambda v: f"{v:,.0f} B"),
+    ("requests_per_ip", "requests per visitor",    lambda v: f"{v:,.1f}"),
+)
+
+
+def _detect_with_isolation_forest(hours: list[dict], sensitivity: str) -> tuple[list[dict], dict]:
+    """
+    Fit an Isolation Forest on the dataset's own hourly feature matrix and
+    return (anomalies, model_info).
+
+    Raises ImportError when scikit-learn is unavailable so the caller can fall
+    back to the statistical method.
+    """
+    import numpy as np
+    from sklearn.ensemble import IsolationForest
+
+    raw = np.array(
+        [
+            [
+                h["total"],
+                _error_rate(h),
+                h["unique_ips"],
+                float(h["avg_size"] or 0.0),
+                h["total"] / max(h["unique_ips"], 1),
+            ]
+            for h in hours
+        ],
+        dtype=float,
+    )
+
+    # Counts are heavy-tailed, so they are log-scaled before modelling.  The
+    # hour of day is encoded on a circle (23:00 sits next to 00:00) so the
+    # model can learn that a volume that is normal at midday is odd at 3 am.
+    hour_angle = np.array([2 * math.pi * h["hour"].hour / 24 for h in hours])
+    matrix = np.column_stack(
+        [
+            np.log1p(raw[:, 0]),
+            raw[:, 1],
+            np.log1p(raw[:, 2]),
+            np.log1p(raw[:, 3]),
+            np.log1p(raw[:, 4]),
+            np.sin(hour_angle),
+            np.cos(hour_angle),
+        ]
+    )
+
+    model = IsolationForest(
+        n_estimators=ISOLATION_FOREST_TREES,
+        contamination="auto",
+        random_state=42,
+    )
+    model.fit(matrix)
+    scores = model.decision_function(matrix)
+
+    cutoff = ISOLATION_FOREST_CUTOFF[sensitivity]
+
+    # Robust "typical" value and spread per feature, used only to explain
+    # *why* an hour was flagged in plain language.
+    medians = np.median(raw, axis=0)
+    spreads = 1.4826 * np.median(np.abs(raw - medians), axis=0)
+    fallback = raw.std(axis=0)
+    spreads = np.where(spreads > 0, spreads, np.where(fallback > 0, fallback, 1.0))
+
+    anomalies: list[dict] = []
+    for idx in np.where(scores < cutoff)[0]:
+        hour = hours[idx]
+        score = float(scores[idx])
+        deviations = (raw[idx] - medians) / spreads
+        order = np.argsort(-np.abs(deviations))
+        top = int(order[0])
+
+        reasons = []
+        for feature_idx in order[:2]:
+            if abs(deviations[feature_idx]) < 1.0:
+                continue
+            _key, label, fmt = _FEATURES[feature_idx]
+            direction = "higher" if deviations[feature_idx] > 0 else "lower"
+            reasons.append(
+                f"{label} {fmt(raw[idx][feature_idx])} "
+                f"({direction} than the typical {fmt(medians[feature_idx])})"
+            )
+        if not reasons:
+            reasons.append("an unusual combination of otherwise normal values")
+
+        anomalies.append({
+            "type":        _anomaly_type(_FEATURES[top][0], deviations[top]),
+            "timestamp":   hour["hour"].isoformat(),
+            "label":       _label(hour["hour"]),
+            "value":       hour["total"],
+            "threshold":   cutoff,
+            "mean":        round(float(medians[0]), 1),
+            "std":         round(float(spreads[0]), 1),
+            "severity":    _severity_from_score(score, cutoff),
+            "score":       round(score, 4),
+            "explanation": "Isolation Forest flagged this hour: " + "; ".join(reasons) + ".",
+        })
+
+    model_info = {
+        "algorithm":      "Isolation Forest",
+        "trees":          ISOLATION_FOREST_TREES,
+        "hours_analysed": len(hours),
+        "features":       [label for _key, label, _fmt in _FEATURES] + ["hour of day"],
+        "score_cutoff":   cutoff,
+    }
+    return anomalies, model_info
+
+
+def _anomaly_type(feature_key: str, deviation: float) -> str:
+    """Name the anomaly after the feature that deviates most from typical."""
+    if feature_key == "error_rate" and deviation > 0:
+        return "error_rate_spike"
+    if feature_key in ("requests", "unique_ips"):
+        return "request_spike" if deviation > 0 else "traffic_drop"
+    return "unusual_pattern"
+
+
+def _severity_from_score(score: float, cutoff: float) -> str:
+    """The further below the cut-off, the more isolated (and severe) the hour."""
+    depth = cutoff - score
+    if depth >= 0.08:
+        return "high"
+    if depth >= 0.03:
+        return "medium"
+    return "low"
+
+
+# ---------------------------------------------------------------------------
 # Statistical utilities
 # ---------------------------------------------------------------------------
+
+def _error_rate(bucket: dict) -> float:
+    return (bucket["errors"] / bucket["total"] * 100.0) if bucket["total"] > 0 else 0.0
+
 
 def _mean_std(values: list[float]) -> tuple[float, float]:
     """Return (mean, population standard deviation) for *values*."""

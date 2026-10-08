@@ -95,6 +95,12 @@ elif os.getenv("USE_SQLITE", "").lower() in ("1", "true", "yes"):
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
             "NAME": BASE_DIR / "db.sqlite3",
+            # WAL lets the dashboard keep reading while the background parser
+            # is writing, instead of failing with "database is locked".
+            "OPTIONS": {
+                "timeout": 20,
+                "init_command": "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
+            },
         }
     }
 else:
@@ -207,8 +213,9 @@ LOGS_MAX_UPLOAD_SIZE = 500 * 1024 * 1024  # 500 MB
 
 # Number of parsed LogEntry objects accumulated before each bulk_create() call.
 # Larger values reduce transaction overhead on big files; smaller values limit
-# peak memory per batch.  2 000 rows ≈ 600 KB RAM — well within safe bounds.
-LOGS_PARSE_BATCH_SIZE = 2000
+# peak memory per batch.  10 000 rows keeps database overhead lower while
+# remaining bounded in memory for typical access-log records.
+LOGS_PARSE_BATCH_SIZE = 10000
 
 # Django will buffer uploaded files in memory below FILE_UPLOAD_MAX_MEMORY_SIZE
 # and then stream to a temp file on disk above it.  Keep this low so large

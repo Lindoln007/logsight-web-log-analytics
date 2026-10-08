@@ -329,8 +329,12 @@
     const c = getThemeColors();
     const ctx = el.getContext("2d");
 
-    const historical = data && Array.isArray(data.historical) ? data.historical : [];
-    const forecast   = data && Array.isArray(data.forecast)   ? data.forecast   : [];
+    const fullHistory = data && Array.isArray(data.historical) ? data.historical : [];
+    const forecast    = data && Array.isArray(data.forecast)   ? data.forecast   : [];
+
+    // Plot only the most recent history (at least a week, or 3x the forecast
+    // length) so the forecast is not squeezed into a sliver at the right edge.
+    const historical = fullHistory.slice(-Math.max(168, forecast.length * 3));
 
     const histLabels = historical.map(function (p) { return p.label || ""; });
     const fcstLabels = forecast.map(function (p) { return p.label || ""; });
@@ -491,8 +495,9 @@
 
     // Build a lookup: label → value for anomaly overlay.
     const anomalySet = {};
+    // The caller decides which anomalies belong on the chart.
     anomArr.forEach(function (a) {
-      if (a.type === "request_spike") anomalySet[a.label] = a.value;
+      anomalySet[a.label] = a.value;
     });
 
     // Anomaly scatter data aligned to the same x-axis.

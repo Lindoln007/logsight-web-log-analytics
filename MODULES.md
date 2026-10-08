@@ -107,8 +107,9 @@ logsight/
 │       ├── analytics.py           # Aggregation queries, caching, filtered summary
 │       ├── log_entries.py         # Paginated log viewer with multi-field filters
 │       ├── dataset_management.py  # Upload, background parse, delete, notifications
-│       ├── forecasting.py         # Seasonal pattern + linear regression + confidence bands
-│       ├── anomaly_detection.py   # Mean ± k·σ spike detection
+│       ├── forecasting.py         # Seasonal pattern + linear regression + Random Forest (ML) + back-test
+│       ├── anomaly_detection.py   # Mean ± k·σ spike detection + Isolation Forest (ML)
+│       ├── ml_runtime.py          # Background warm-up of scikit-learn
 │       ├── alerts.py              # Auto health check, persistent Alert records, history
 │       ├── reports.py             # CSV and JSON report generation
 │       ├── security.py            # Brute-force, scanner, sensitive-path, error-concentration
@@ -225,10 +226,13 @@ A standalone page that matches the main app's topbar. Shows the user's avatar in
 
 1. Opens the file — supports `.gz` via `gzip.open`.
 2. Reads line by line; never loads the full file into memory.
-3. Each line is matched against `ACCESS_LOG_PATTERN` (compiled regex) extracting: IP address, timestamp, method, endpoint, protocol, status code, response size, referrer, user agent.
-4. Parsed entries accumulate in a list; every 2 000 entries, `LogEntry.objects.bulk_create()` inserts the batch in a single transaction.
-5. After all lines are processed: `dataset.status = completed`, `compute_and_persist_analytics()` runs, and a notification is sent.
-6. On any failure: `dataset.status = failed`, error message stored in `dataset.processing_error`.
+3. Each line is matched against `ACCESS_LOG_PATTERN` (compiled regex) extracting: client address, timestamp, method, endpoint, protocol, status code, response size, referrer, user agent. The timestamp is parsed by slicing fixed positions (not `strptime`) and converted to UTC.
+4. Parsed rows accumulate as plain tuples; every `LOGS_PARSE_BATCH_SIZE` (10 000) rows are written with multi-row `INSERT` statements in a single transaction. If the raw insert fails, the batch is retried through `LogEntry.objects.bulk_create()`.
+5. After each batch `dataset.total_entries` is updated, so the upload page can show live progress.
+6. After all lines are processed: `dataset.status = completed`, `compute_and_persist_analytics()` runs, and a notification is sent.
+7. On any failure — including a file that contains no valid access-log lines — partial rows are removed, `dataset.status = failed`, and the reason is stored in `dataset.processing_error`.
+
+The parser tolerates escaped quotes inside quoted fields, spaces inside the URL, client hostnames in place of IP addresses, and extra fields after the user agent.
 
 ### Supported formats
 
@@ -417,9 +421,30 @@ forecast[i] = max(0, m × (n + i) + b)
 
 Best for showing a clean overall trend direction.
 
+#### Machine Learning (`ml` parameter)
+
+A scikit-learn `RandomForestRegressor` (100 trees) trained on the uploaded dataset itself each time the forecast is requested — there is no pre-trained model. Each past hour is one training example described by:
+
+| Feature | Meaning |
+|---|---|
+| `hour_sin`, `hour_cos` | Hour of day encoded on a circle, so 23:00 sits next to 00:00 |
+| `weekday`, `is_weekend` | Day of week |
+| `lag_1`, `lag_2`, `lag_3`, `lag_24` | Request count 1, 2, 3 and 24 hours earlier |
+| `mean_6`, `mean_24` | Average of the previous 6 and 24 hours |
+
+The forecast is recursive: the model predicts the next hour, that prediction is appended to the history, and the step repeats. The method needs at least 72 hours of history; with less it falls back to Seasonal Pattern and the response carries a `note` explaining why.
+
+### History window
+
+All three methods work on a continuous hourly series covering the most recent 8 weeks of the dataset. Hours with no requests are filled with zero.
+
+### Accuracy check (back-test)
+
+Every response includes an `evaluation` block. The last 20% of the history (between 6 hours and 7 days) is hidden, each method forecasts it from the earlier data only, and the forecasts are scored against the real values with MAE and RMSE. The page shows the result as a comparison table.
+
 ### Confidence bands
 
-Both methods return `upper` (forecast × 1.20) and `lower` (forecast × 0.80) alongside every forecast point. The chart renders a shaded amber band between upper and lower bounds to communicate uncertainty.
+Seasonal Pattern returns `upper` (forecast × 1.20) and `lower` (forecast × 0.80); Linear Regression uses ±15%. The Machine Learning method uses the 10th and 90th percentile of its individual trees' predictions. The chart renders a shaded amber band between upper and lower bounds to communicate uncertainty.
 
 ### Chart
 
@@ -440,9 +465,17 @@ Historical data renders as a solid indigo area line; the forecast renders as a d
 **Route:** `#/anomalies` → `GET /logs/datasets/<id>/anomalies/`  
 **File:** `logs/services/anomaly_detection.py`
 
-Identifies hours with abnormally high request volumes or error rates using **mean ± k·σ thresholding**.
+Identifies unusual hours with one of two methods, chosen with the `method` parameter: **mean ± k·σ thresholding** (`statistical`, default) or an **Isolation Forest** machine-learning model (`isolation_forest`).
 
-### Detection passes
+### Isolation Forest (`method=isolation_forest`)
+
+A scikit-learn `IsolationForest` (200 trees) is trained on the uploaded dataset itself — unsupervised, so no labels and no pre-trained model. Each hour is one row with these features: request count, error rate, unique visitors, average response size, requests per visitor, and hour of day. The model scores how easily each hour can be separated from the rest; hours whose score falls below the sensitivity cut-off (−0.12 low, −0.08 medium, −0.05 high) are flagged.
+
+Because all features are considered together, it also flags hours that are unusual only in combination — for example a normal request count that comes from a single visitor and mostly fails — which the statistical method cannot see. Each finding lists the two features that deviate most from the dataset's median. The method needs at least 24 hours of data; with less it falls back to the statistical method and the response carries a `note`.
+
+Additional anomaly types from this method: `traffic_drop` and `unusual_pattern`.
+
+### Statistical detection passes (`method=statistical`)
 
 | Type | What is measured |
 |---|---|

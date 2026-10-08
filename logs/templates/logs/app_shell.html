@@ -64,8 +64,8 @@
             <div class="top-nav-group" data-nav-item data-nav-section="analytics">
               <button type="button" class="top-nav-link" aria-haspopup="true">Analytics</button>
               <div class="nav-dropdown">
-                <a href="{% url 'coming-soon' %}?module=forecasting" data-coming-soon="forecasting">Forecasting<span>Predict traffic and load</span></a>
-                <a href="{% url 'coming-soon' %}?module=anomalies" data-coming-soon="anomalies">Anomalies<span>Detect unusual behavior</span></a>
+                <a href="#/forecast" data-route="forecast">Forecasting<span>Predict traffic and load</span></a>
+                <a href="#/anomalies" data-route="anomalies">Anomalies<span>Detect unusual behavior</span></a>
                 <a href="#/compare" data-route="compare">Compare Datasets<span>Side-by-side dataset analysis</span></a>
                 <a href="#/search" data-route="search">Advanced Search<span>Filter and query log entries</span></a>
                 <a href="#/reports" data-route="reports">Reports<span>Export operational summaries</span></a>
@@ -128,8 +128,8 @@
           <a href="#/datasets" data-route="datasets">Datasets</a>
           <a href="#/viewer" data-route="viewer">Log Viewer</a>
           <p>Analytics</p>
-          <a href="{% url 'coming-soon' %}?module=forecasting" data-coming-soon="forecasting">Forecasting</a>
-          <a href="{% url 'coming-soon' %}?module=anomalies" data-coming-soon="anomalies">Anomalies</a>
+          <a href="#/forecast" data-route="forecast">Forecasting</a>
+          <a href="#/anomalies" data-route="anomalies">Anomalies</a>
           <a href="#/compare" data-route="compare">Compare Datasets</a>
           <a href="#/search" data-route="search">Advanced Search</a>
           <a href="#/reports" data-route="reports">Reports</a>
@@ -435,6 +435,7 @@
                   <select id="forecast-method" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
                     <option value="moving_avg">Seasonal Pattern</option>
                     <option value="linear_regression">Linear Regression</option>
+                    <option value="ml">Machine Learning (AI)</option>
                   </select>
                 </label>
                 <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
@@ -447,6 +448,9 @@
                 Run Forecast
               </button>
             </div>
+
+            <!-- Fallback notice (e.g. not enough history for the ML model) -->
+            <div id="forecast-note" class="hidden rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm font-medium text-amber-700 dark:border-amber-800/40 dark:bg-amber-950/20 dark:text-amber-300"></div>
 
             <!-- Result cards -->
             <div id="forecast-summary-cards" class="hidden grid gap-4 sm:grid-cols-3">
@@ -469,7 +473,7 @@
               <div class="mb-4 flex items-start justify-between gap-2">
                 <div>
                   <h2 class="text-base font-semibold text-slate-900 dark:text-white">Traffic Forecast</h2>
-                  <p class="text-sm text-slate-500 dark:text-slate-400">Historical data (solid) vs. predicted values (dashed)</p>
+                  <p class="text-sm text-slate-500 dark:text-slate-400">Most recent history (solid) vs. predicted values (dashed)</p>
                 </div>
                 <div class="flex items-center gap-3 text-xs text-slate-500">
                   <span class="flex items-center gap-1.5"><span class="inline-block h-0.5 w-6 rounded bg-indigo-500"></span>Historical</span>
@@ -483,6 +487,26 @@
                 </div>
               </div>
               <div id="forecast-chart-wrap" class="hidden h-72 w-full"><canvas id="chart-forecast"></canvas></div>
+            </div>
+
+            <!-- Accuracy comparison (back-test) -->
+            <div id="forecast-evaluation" class="hidden rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900/60">
+              <div class="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+                <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Accuracy check</h3>
+                <p id="forecast-evaluation-desc" class="mt-1 text-sm text-slate-500 dark:text-slate-400"></p>
+              </div>
+              <div class="overflow-x-auto">
+                <table class="w-full text-left text-sm">
+                  <thead class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                    <tr>
+                      <th class="px-5 py-3 font-medium">Method</th>
+                      <th class="px-5 py-3 text-right font-medium" title="Mean absolute error: the average number of requests per hour the forecast was off by">Average error (MAE)</th>
+                      <th class="px-5 py-3 text-right font-medium" title="Root mean squared error: like MAE, but large misses count for more">RMSE</th>
+                    </tr>
+                  </thead>
+                  <tbody id="forecast-evaluation-rows" class="divide-y divide-slate-100 dark:divide-slate-800"></tbody>
+                </table>
+              </div>
             </div>
 
             <!-- Method explanation -->
@@ -508,6 +532,13 @@
                   </select>
                 </label>
                 <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
+                  Method
+                  <select id="anomaly-method" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
+                    <option value="statistical">Statistical threshold</option>
+                    <option value="isolation_forest">Isolation Forest (AI)</option>
+                  </select>
+                </label>
+                <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
                   Sensitivity
                   <select id="anomaly-sensitivity" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
                     <option value="low">Low — only major spikes</option>
@@ -521,6 +552,9 @@
                 Detect Anomalies
               </button>
             </div>
+
+            <!-- Fallback notice (e.g. not enough history for the Isolation Forest) -->
+            <div id="anomaly-note" class="hidden rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm font-medium text-amber-700 dark:border-amber-800/40 dark:bg-amber-950/20 dark:text-amber-300"></div>
 
             <!-- Summary banner -->
             <div id="anomaly-summary-banner" class="hidden rounded-2xl border px-5 py-4">
@@ -566,6 +600,14 @@
                 <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Findings</h3>
               </div>
               <div class="divide-y divide-slate-100 dark:divide-slate-800" id="anomaly-list"></div>
+            </div>
+
+            <!-- Method explanation -->
+            <div class="rounded-2xl border border-slate-200/80 bg-slate-50 p-5 dark:border-slate-800 dark:bg-slate-900/40">
+              <h3 class="mb-2 text-sm font-semibold text-slate-700 dark:text-slate-300">How it works</h3>
+              <p id="anomaly-method-desc" class="text-sm leading-relaxed text-slate-600 dark:text-slate-400">
+                <strong>Statistical threshold:</strong> Works out the average request count and error rate per hour, then flags any hour that sits far above that average. Each measure is checked on its own.
+              </p>
             </div>
           </section>
 
@@ -1020,8 +1062,8 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-    <script src="js/api.js?v=20260528-v2"></script>
-    <script src="js/charts.js?v=20260528-v2"></script>
-    <script src="js/app.js?v=20260528-v2"></script>
+    <script src="js/api.js?v=20261008-v6"></script>
+    <script src="js/charts.js?v=20261008-v6b"></script>
+    <script src="js/app.js?v=20261008-v6"></script>
   </body>
 </html>

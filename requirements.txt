@@ -1,6 +1,7 @@
-Django>=5.0
+Django>=5.1
 psycopg2-binary>=2.9
 dj-database-url>=1.0.0
 python-dotenv>=1.0
 gunicorn>=21.0
 whitenoise>=6.0
+scikit-learn>=1.8
