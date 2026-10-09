@@ -23,83 +23,17 @@ def register_view(request):
     if request.user.is_authenticated:
         return redirect("app-shell")
 
-    from logs.services.invites import validate_invite, redeem_invite
-    from logs.services.rbac import get_or_create_profile
-
-    token_str = request.GET.get("invite") or request.POST.get("invite_token", "")
-    invite = validate_invite(token_str) if token_str else None
-    invite_invalid = bool(token_str) and invite is None
-    has_fixed_email = bool(invite and invite.email)
-
     if request.method == "POST":
         form = RegistrationForm(request.POST)
-        if has_fixed_email:
-            form.data = form.data.copy()
-            form.data["email"] = invite.email
-
         if form.is_valid():
-            user = form.save(commit=False)
-            if has_fixed_email:
-                user.email = invite.email
-            user.save()
-
-            if invite:
-                redeem_invite(token_str, user)
-                messages.success(
-                    request,
-                    f"Welcome to LogSight! You've been added as {invite.role.capitalize()}.",
-                )
-            else:
-                profile = get_or_create_profile(user)
-                profile.role = profile.ROLE_ADMIN
-                profile.save(update_fields=["role"])
-                messages.success(
-                    request,
-                    "Welcome to LogSight! Your account has been created and you are now an admin.",
-                )
-
+            user = form.save()
+            messages.success(request, "Your LogSight account has been created.")
             login(request, user)
             return redirect("app-shell")
     else:
-        form = RegistrationForm(initial={"email": invite.email if invite else ""})
+        form = RegistrationForm()
 
-    if has_fixed_email:
-        form.fields["email"].widget.attrs["readonly"] = True
-        form.fields["email"].widget.attrs["class"] += " opacity-60 cursor-not-allowed"
-
-    return render(request, "accounts/register.html", {
-        "form":          form,
-        "invite":        invite,
-        "token_str":     token_str,
-        "invite_invalid": invite_invalid,
-    })
-
-
-@require_http_methods(["GET", "POST"])
-def redeem_code_view(request):
-    """
-    GET/POST /accounts/redeem/
-    Validates an invite token entered on the login page and redirects
-    to the registration form with the token in the query string.
-    """
-    if request.user.is_authenticated:
-        return redirect("app-shell")
-
-    from logs.services.invites import validate_invite
-
-    error = None
-    if request.method == "POST":
-        code = request.POST.get("invite_code", "").strip()
-        if not code:
-            error = "Please enter your invite code."
-        else:
-            invite = validate_invite(code)
-            if invite:
-                return redirect(f"/accounts/register/?invite={code}")
-            else:
-                error = "That code is invalid or has already been used. Check with your admin."
-
-    return render(request, "accounts/login.html", {"show_invite_form": True, "invite_error": error})
+    return render(request, "accounts/register.html", {"form": form})
 
 
 @require_http_methods(["POST"])

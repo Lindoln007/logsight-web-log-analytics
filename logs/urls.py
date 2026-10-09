@@ -92,40 +92,6 @@ urlpatterns = [
     ),
 
     # ------------------------------------------------------------------
-    # Alerts  (rules + history, scoped to dataset)
-    # ------------------------------------------------------------------
-    path(
-        "datasets/<int:dataset_id>/alerts/",
-        views.next_semester_redirect,
-        {"module_slug": "alerts"},
-        name="alerts",
-    ),
-    path(
-        "datasets/<int:dataset_id>/alerts/check/",
-        views.next_semester_redirect,
-        {"module_slug": "alerts"},
-        name="alerts-check",
-    ),
-    path(
-        "datasets/<int:dataset_id>/alerts/history/",
-        views.next_semester_redirect,
-        {"module_slug": "alerts"},
-        name="alerts-history",
-    ),
-    path(
-        "datasets/<int:dataset_id>/alerts/auto/",
-        views.next_semester_redirect,
-        {"module_slug": "alerts"},
-        name="alerts-auto",
-    ),
-    path(
-        "datasets/<int:dataset_id>/alerts/<int:rule_id>/",
-        views.next_semester_redirect,
-        {"module_slug": "alerts"},
-        name="alert-rule-detail",
-    ),
-
-    # ------------------------------------------------------------------
     # Report generation  (download CSV or JSON)
     # ------------------------------------------------------------------
     path(
@@ -205,69 +171,4 @@ urlpatterns = [
         name="notifications-delete-all",
     ),
 
-    # ------------------------------------------------------------------
-    # Log simulator  (Module 6)
-    # ------------------------------------------------------------------
-    path(
-        "datasets/<int:dataset_id>/simulate/",
-        views.next_semester_redirect,
-        {"module_slug": "live-ingestion"},
-        name="simulate-logs",
-    ),
-    path(
-        "datasets/<int:dataset_id>/simulate/error-spike/",
-        views.next_semester_redirect,
-        {"module_slug": "live-ingestion"},
-        name="simulate-error-spike",
-    ),
-    path(
-        "datasets/<int:dataset_id>/simulate/traffic-spike/",
-        views.next_semester_redirect,
-        {"module_slug": "live-ingestion"},
-        name="simulate-traffic-spike",
-    ),
-    path(
-        "datasets/<int:dataset_id>/simulate/download/",
-        views.next_semester_redirect,
-        {"module_slug": "live-ingestion"},
-        name="simulate-download",
-    ),
-    path(
-        "alerts/all-history/",
-        views.next_semester_redirect,
-        {"module_slug": "alerts"},
-        name="alerts-all-history",
-    ),
-
-    # ------------------------------------------------------------------
-    # RBAC admin  (Module 7)
-    # ------------------------------------------------------------------
-    path(
-        "admin/users/",
-        views.next_semester_redirect,
-        {"module_slug": "user-management"},
-        name="admin-users",
-    ),
-    path(
-        "admin/users/<int:user_id>/role/",
-        views.next_semester_redirect,
-        {"module_slug": "user-management"},
-        name="admin-assign-role",
-    ),
-
-    # ------------------------------------------------------------------
-    # Invite tokens
-    # ------------------------------------------------------------------
-    path(
-        "invites/",
-        views.next_semester_redirect,
-        {"module_slug": "user-management"},
-        name="invites",
-    ),
-    path(
-        "invites/<int:invite_id>/revoke/",
-        views.next_semester_redirect,
-        {"module_slug": "user-management"},
-        name="invite-revoke",
-    ),
 ]

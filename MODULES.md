@@ -11,7 +11,7 @@
 1. [System Overview](#1-system-overview)
 2. [Project Structure](#2-project-structure)
 3. [Authentication & Accounts](#3-authentication--accounts)
-4. [Role-Based Access Control (RBAC)](#4-role-based-access-control-rbac)
+4. [Account & Dataset Access](#4-account--dataset-access)
 5. [Log Upload](#5-log-upload)
 6. [Log Parsing Engine](#6-log-parsing-engine)
 7. [Dataset Management](#7-dataset-management)
@@ -23,15 +23,13 @@
 13. [Advanced Search](#13-advanced-search)
 14. [Traffic Forecasting](#14-traffic-forecasting)
 15. [Anomaly Detection](#15-anomaly-detection)
-16. [Alerts](#16-alerts)
-17. [Security Insights](#17-security-insights)
-18. [Dataset Comparison](#18-dataset-comparison)
-19. [Reports](#19-reports)
-20. [Live Ingestion Simulator](#20-live-ingestion-simulator)
-21. [Notifications](#21-notifications)
-22. [Frontend SPA Architecture](#22-frontend-spa-architecture)
-23. [Database Schema](#23-database-schema)
-24. [Full API Reference](#24-full-api-reference)
+16. [Security Insights](#16-security-insights)
+17. [Dataset Comparison](#17-dataset-comparison)
+18. [Reports](#18-reports)
+19. [Notifications](#19-notifications)
+20. [Frontend SPA Architecture](#20-frontend-spa-architecture)
+21. [Database Schema](#21-database-schema)
+22. [Full API Reference](#22-full-api-reference)
 
 ---
 
@@ -78,7 +76,7 @@ SPA fetches JSON from REST API → Chart.js renders visualizations
 ```
 logsight/
 ├── loganalytics/                  # Django project configuration
-│   ├── settings.py                # DB, upload limits, cache, auth, email (SMTP / console)
+│   ├── settings.py                # DB, upload limits, cache, auth
 │   ├── urls.py                    # Root URL dispatcher
 │   └── wsgi.py
 │
@@ -92,15 +90,12 @@ logsight/
 │
 ├── logs/                          # Core analytics app
 │   ├── models.py                  # Dataset, LogEntry, AnalyticsSummary,
-│   │                              #   AlertRule, Alert, DashboardPreference,
-│   │                              #   Notification, UserProfile
+│   │                              #   DashboardPreference, Notification
 │   ├── views.py                   # All REST API endpoints (~950 lines)
 │   ├── urls.py                    # 35 URL patterns
 │   ├── forms.py                   # LogUploadForm
-│   ├── admin.py
-│   ├── apps.py                    # Connects post_save signal for UserProfile
-│   ├── signals.py                 # Auto-creates UserProfile; first user → admin role
-│   ├── migrations/                # 7 migrations (0001 – 0007)
+│   ├── apps.py
+│   ├── migrations/                # Database schema history
 │   └── services/
 │       ├── __init__.py            # Public re-exports for all services
 │       ├── log_parser.py          # Apache/Nginx Combined Log Format parser
@@ -110,13 +105,10 @@ logsight/
 │       ├── forecasting.py         # Seasonal pattern + linear regression + Random Forest (ML) + back-test
 │       ├── anomaly_detection.py   # Mean ± k·σ spike detection + Isolation Forest (ML)
 │       ├── ml_runtime.py          # Background warm-up of scikit-learn
-│       ├── alerts.py              # Auto health check, persistent Alert records, history
 │       ├── reports.py             # CSV and JSON report generation
 │       ├── security.py            # Brute-force, scanner, sensitive-path, error-concentration
 │       ├── comparison.py          # Side-by-side dataset analytics
 │       ├── notifications.py       # Create, list, mark-read, email dispatch
-│       ├── simulator.py           # Synthetic log generation, error/traffic spike injection
-│       └── rbac.py                # Role management, require_role() decorator
 │
 ├── frontend/
 │   ├── js/
@@ -163,34 +155,9 @@ A standalone page that matches the main app's topbar. Shows the user's avatar in
 
 ---
 
-## 4. Role-Based Access Control (RBAC)
+## 4. Account & Dataset Access
 
-**Files:** `logs/services/rbac.py`, `logs/signals.py`, `logs/models.py` (`UserProfile`)
-
-### Roles
-
-| Role | Permissions |
-|---|---|
-| `admin` | Full access — upload, delete, analyse, manage users |
-| `analyst` | Upload and analyse own datasets; no user management |
-| `viewer` | Read-only dashboard and log viewer; cannot upload or delete |
-| `pending` | New user awaiting role assignment; cannot access any data |
-
-### How it works
-
-- A `UserProfile` record is created automatically via a `post_save` signal on `User`.
-- The **first user ever registered** on the system is automatically assigned the `admin` role.
-- All subsequent users start as `pending` until an admin assigns them a role.
-- The `require_role(*roles)` decorator restricts views to specific roles.
-- An admin-only user management page (`GET /logs/admin/users/`) lists all users with their profiles; role assignment is done via `POST /logs/admin/users/<id>/role/`.
-
-### `UserProfile` model
-
-| Field | Type | Notes |
-|---|---|---|
-| `user` | OneToOneField | Links to Django `User` |
-| `role` | CharField | `admin` / `analyst` / `viewer` / `pending` |
-| `created_at` | DateTimeField | |
+Accounts use standard sign-in and self-registration. Dataset access is scoped to its owner on every API request; a signed-in user can only view, analyse, or delete their own datasets.
 
 ---
 
@@ -504,37 +471,7 @@ A colour-coded summary banner describes findings in plain English ("Found 4 anom
 
 ---
 
-## 16. Alerts
-
-**Route:** `#/alerts`  
-**Files:** `logs/services/alerts.py`, `logs/models.py` (`AlertRule`, `Alert`)
-
-### Auto health check
-
-No rule configuration required. The system runs two built-in checks when **Run Health Check** is clicked (or after every simulator batch):
-
-| Check | Warning | Critical |
-|---|---|---|
-| Error Rate | > 10% | > 25% |
-| Traffic Spike | Last hour > 2× dataset mean | Last hour > 3× dataset mean |
-
-Results appear as colour-coded cards (green / amber / red). Warnings and critical findings are **automatically persisted as `Alert` records** and trigger a **notification** (bell badge) and an **email** to `mbayaasante@gmail.com`.
-
-### Alert history table
-
-A persistent "Triggered Alerts — All Datasets" table at the bottom of the Alerts module shows every alert that has ever fired across all datasets. Columns: timestamp, dataset name, type (Error Rate / Traffic Spike), severity badge, message. Loads automatically on module open; has a Refresh button.
-
-### System AlertRule
-
-A hidden `__auto_check__` `AlertRule` is created automatically per dataset on first check. This is how `Alert` records are stored without user-created rules.
-
-### Email delivery
-
-Alert emails are sent to `LOGSIGHT_ALERT_EMAIL` (default: `mbayaasante@gmail.com`). Configure `GMAIL_APP_PASSWORD` and `GMAIL_ADDRESS` in `.env` for real Gmail SMTP delivery. Without those variables, emails print to the Django `runserver` terminal (console backend).
-
----
-
-## 17. Security Insights
+## 16. Security Insights
 
 **Route:** `#/security` → `GET /logs/datasets/<id>/security/`  
 **File:** `logs/services/security.py`
@@ -564,7 +501,7 @@ Each finding card shows: title, plain-English description with actual data value
 
 ---
 
-## 18. Dataset Comparison
+## 17. Dataset Comparison
 
 **Route:** `#/compare` → `GET /logs/compare/?a=<id>&b=<id>`  
 **File:** `logs/services/comparison.py`
@@ -585,7 +522,7 @@ A ranked list of Dataset A's top 10 endpoints with request counts.
 
 ---
 
-## 19. Reports
+## 18. Reports
 
 **Route:** `#/reports` → `GET /logs/datasets/<id>/report/?format=csv|json`  
 **File:** `logs/services/reports.py`
@@ -609,43 +546,12 @@ Generates a downloadable summary report. The browser navigates `window.location.
 
 ---
 
-## 20. Live Ingestion Simulator
-
-**Route:** `#/simulate`  
-**File:** `logs/services/simulator.py`
-
-Simulates real-time log ingestion by generating synthetic Apache/Nginx entries on demand and appending them to a selected dataset. Useful for demoing the analytics pipeline and testing alert thresholds without a live web server.
-
-### Buttons
-
-| Button | Action |
-|---|---|
-| **Generate Once** | Inserts one batch of N synthetic entries (1–50, default 10) |
-| **Auto (every 3 s)** | Starts an interval timer that generates a batch every 3 seconds; click again to stop |
-| **Spike Errors** | Injects 30 entries that are ~70% 4xx/5xx to push error rate above critical threshold |
-| **Spike Traffic** | Injects 50 normal GET 200 entries in one shot to push last-hour count above 3× mean |
-| **Download CSV** | Downloads all simulator-generated entries for the dataset as a CSV file |
-
-### Alert integration
-
-After every batch (regular, error spike, or traffic spike), the backend automatically runs `auto_check_alerts()`. If a warning or critical condition is detected:
-- An `Alert` record is persisted.
-- A `Notification` is created (bell badge updates).
-- An email is sent to `mbayaasante@gmail.com`.
-- The simulator's status tile shows "⚠ CRITICAL ALERT" or "⚡ WARNING" in red/amber.
-
-### Live feed
-
-New entries appear at the top of the feed panel in real time, styled with colour-coded status codes matching the rest of the app. The feed is capped at 100 visible lines.
-
----
-
-## 21. Notifications
+## 19. Notifications
 
 **Route:** Bell icon in top navigation  
 **File:** `logs/services/notifications.py`, `logs/models.py` (`Notification`)
 
-In-app notification system for alert triggers, dataset processing completions, and other system events.
+In-app notification system for dataset processing completions and other system events.
 
 ### How it works
 
@@ -660,11 +566,6 @@ In-app notification system for alert triggers, dataset processing completions, a
 | Type | When created |
 |---|---|
 | `dataset_ready` | When a dataset finishes parsing |
-| `alert` | When `auto_check_alerts()` detects a warning or critical condition |
-
-### Email dispatch
-
-Every `warning` or `critical` notification automatically triggers an email to `LOGSIGHT_ALERT_EMAIL`. In development (no `GMAIL_APP_PASSWORD` in `.env`), the email is printed to the `runserver` terminal. With Gmail SMTP credentials in `.env`, the email is delivered to the real inbox.
 
 ### `Notification` model
 
@@ -673,14 +574,14 @@ Every `warning` or `critical` notification automatically triggers an email to `L
 | `user` | ForeignKey to User |
 | `message` | TextField |
 | `severity` | `info` / `warning` / `critical` |
-| `notification_type` | `dataset_ready` / `alert` / `general` |
+| `notification_type` | `dataset_ready` / `general` |
 | `is_read` | BooleanField (default False) |
 | `created_at` | DateTimeField (indexed) |
 | `dataset` | ForeignKey to Dataset (nullable) |
 
 ---
 
-## 22. Frontend SPA Architecture
+## 20. Frontend SPA Architecture
 
 The entire frontend is a **single-page application** served from `logs/templates/logs/app_shell.html`. Navigation never triggers a full page reload.
 
@@ -699,9 +600,7 @@ Hash-based routing (`window.location.hash`) maps URL fragments to `<section data
 | `#/compare` | Dataset Comparison |
 | `#/search` | Advanced Search |
 | `#/reports` | Reports |
-| `#/alerts` | Alerts |
 | `#/security` | Security Insights |
-| `#/simulate` | Live Ingestion Simulator |
 
 On `hashchange`, `runRoute()` shows the target section (CSS enter animation), hides all others, and calls the appropriate init function.
 
@@ -715,7 +614,7 @@ On `hashchange`, `runRoute()` shows the target section (CSS enter animation), hi
 
 ### Top navigation
 
-The desktop nav has four groups: **Dashboard**, **Data** (Upload, Datasets, Log Viewer), **Analytics** (Forecasting, Anomalies, Compare, Advanced Search, Reports), **Monitoring** (Alerts, Security Insights, Live Ingestion). Hover-activated dropdowns with smooth scale/fade transitions.
+The desktop nav has four groups: **Dashboard**, **Data** (Upload, Datasets, Log Viewer), **Analytics** (Forecasting, Anomalies, Compare, Advanced Search, Reports), and **Monitoring** (Security Insights). Hover-activated dropdowns with smooth scale/fade transitions.
 
 ### Context toolbar
 
@@ -723,18 +622,15 @@ A sticky toolbar below the topbar shows the current page title and — on module
 
 ---
 
-## 23. Database Schema
+## 21. Database Schema
 
 ```
 User (Django built-in)
- ├── UserProfile (user OneToOne)       ← RBAC role
  ├── DashboardPreference (user OneToOne)
  ├── Notification (user FK, dataset FK nullable)
  └── Dataset (owner FK)
       ├── LogEntry (dataset FK)         ← one per parsed log line
       ├── AnalyticsSummary (dataset OneToOne)
-      └── AlertRule (dataset FK, owner FK)
-           └── Alert (rule FK)          ← one per triggered threshold
 ```
 
 ### `LogEntry` indexes
@@ -752,7 +648,7 @@ User (Django built-in)
 
 ---
 
-## 24. Full API Reference
+## 22. Full API Reference
 
 All endpoints require authentication. All dataset-scoped endpoints filter by `dataset__owner=request.user`.
 
@@ -809,18 +705,6 @@ All endpoints require authentication. All dataset-scoped endpoints filter by `da
 |---|---|---|
 | `GET` | `/logs/datasets/<id>/anomalies/` | `sensitivity` (`low` / `medium` / `high`) |
 
-### Alerts
-
-| Method | URL | Notes |
-|---|---|---|
-| `GET` | `/logs/datasets/<id>/alerts/` | List alert rules and recent history |
-| `POST` | `/logs/datasets/<id>/alerts/` | Create rule `{ name, error_rate_threshold, request_spike_multiplier }` |
-| `PUT/DELETE` | `/logs/datasets/<id>/alerts/<rule_id>/` | Update or delete a rule |
-| `POST` | `/logs/datasets/<id>/alerts/check/` | Evaluate active rules |
-| `GET` | `/logs/datasets/<id>/alerts/history/` | `limit` |
-| `GET` | `/logs/datasets/<id>/alerts/auto/` | Run built-in smart health check |
-| `GET` | `/logs/alerts/all-history/` | All triggered alerts across all datasets |
-
 ### Security insights
 
 | Method | URL |
@@ -839,15 +723,6 @@ All endpoints require authentication. All dataset-scoped endpoints filter by `da
 |---|---|---|
 | `GET` | `/logs/datasets/<id>/report/` | `format` (`csv` / `json`) |
 
-### Live ingestion simulator
-
-| Method | URL | Notes |
-|---|---|---|
-| `POST` | `/logs/datasets/<id>/simulate/` | `?count=N` (1–50) |
-| `POST` | `/logs/datasets/<id>/simulate/error-spike/` | Injects 30 high-error entries |
-| `POST` | `/logs/datasets/<id>/simulate/traffic-spike/` | Injects 50 burst entries |
-| `GET` | `/logs/datasets/<id>/simulate/download/` | CSV download of simulated entries |
-
 ### Notifications
 
 | Method | URL | Notes |
@@ -863,13 +738,6 @@ All endpoints require authentication. All dataset-scoped endpoints filter by `da
 |---|---|---|
 | `GET` | `/logs/preferences/` | — |
 | `POST` | `/logs/preferences/` | `{ hidden_widgets: [...] }` |
-
-### RBAC administration
-
-| Method | URL | Notes |
-|---|---|---|
-| `GET` | `/logs/admin/users/` | Admin only — list all users with roles |
-| `POST` | `/logs/admin/users/<id>/role/` | Admin only — `{ role: "analyst" }` |
 
 ---
 

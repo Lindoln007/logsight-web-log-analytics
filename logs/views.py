@@ -6,28 +6,22 @@ from urllib.parse import urlencode
 
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
-from django.http import HttpRequest, HttpResponse, JsonResponse
+from django.http import Http404, HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
 from logs.forms import DEFAULT_MAX_UPLOAD_SIZE, LogUploadForm
-from logs.models import AlertRule, Dataset
+from logs.models import Dataset
 from logs.services import (
     PAGE_SIZE_DEFAULT,
     PAGE_SIZE_MAX,
-    auto_check_alerts,
-    check_and_trigger_alerts,
     compute_and_persist_analytics,
-    create_alert_rule,
     create_dataset_from_upload,
-    delete_alert_rule,
     delete_dataset_and_file,
     generate_csv_report,
     generate_json_report,
-    get_alert_history,
-    get_alert_rules,
     get_analytics_overview,
     get_anomalies,
     get_error_breakdown,
@@ -41,7 +35,6 @@ from logs.services import (
     get_traffic_forecast,
     list_datasets,
     serialize_dataset,
-    update_alert_rule,
 )
 from logs.services.analytics import (
     DEFAULT_TOP_ENDPOINTS_LIMIT,
@@ -55,17 +48,16 @@ logger = logging.getLogger(__name__)
 NEXT_SEMESTER_MODULES = {
     "anomalies": "Anomalies",
     "advanced-search": "Advanced Search",
-    "alerts": "Alerts",
     "forecasting": "Forecasting",
     "security-insights": "Security Insights",
-    "live-ingestion": "Live Ingestion",
-    "user-management": "User Management",
 }
 
 
 @login_required
 def coming_soon_view(request: HttpRequest) -> HttpResponse:
     requested = request.GET.get("module", "").strip()
+    if requested.lower() in {"admin", "live-ingestion", "user-management", "alerts"}:
+        raise Http404
     module_name = NEXT_SEMESTER_MODULES.get(requested.lower(), requested or "This feature")
     return render(
         request,
@@ -151,14 +143,6 @@ def dataset_status_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
 @login_required
 @require_http_methods(["GET", "POST"])
 def upload_log_view(request: HttpRequest) -> JsonResponse:
-    if request.method == "POST":
-        from logs.services.rbac import get_or_create_profile
-        try:
-            if get_or_create_profile(request.user).role not in ("admin", "analyst"):
-                return JsonResponse({"error": "You need Analyst or Admin access to upload log files."}, status=403)
-        except Exception:
-            return JsonResponse({"error": "Role check failed."}, status=403)
-
     if request.method == "GET":
         return JsonResponse(
             {
@@ -198,12 +182,6 @@ def upload_log_view(request: HttpRequest) -> JsonResponse:
 @login_required
 @require_http_methods(["POST", "DELETE"])
 def delete_dataset_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
-    from logs.services.rbac import get_or_create_profile
-    try:
-        if get_or_create_profile(request.user).role not in ("admin", "analyst"):
-            return JsonResponse({"error": "You need Analyst or Admin access to delete datasets."}, status=403)
-    except Exception:
-        return JsonResponse({"error": "Role check failed."}, status=403)
     dataset = _get_user_dataset(request, dataset_id)
     serialized_dataset = serialize_dataset(dataset)
     delete_dataset_and_file(dataset, owner=request.user)
@@ -601,125 +579,6 @@ def anomaly_detection_view(request: HttpRequest, dataset_id: int) -> JsonRespons
 
 
 # ---------------------------------------------------------------------------
-# Alert management views
-# ---------------------------------------------------------------------------
-
-
-@login_required
-@require_http_methods(["GET", "POST"])
-def alerts_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
-    """
-    GET  /logs/datasets/<id>/alerts/  — list all alert rules for the dataset.
-    POST /logs/datasets/<id>/alerts/  — create a new alert rule.
-
-    POST body (JSON):
-    {
-        "name": "High error rate",
-        "error_rate_threshold": 5.0,
-        "request_spike_multiplier": 3.0,
-        "is_active": true
-    }
-    """
-    _get_user_dataset(request, dataset_id)
-
-    if request.method == "GET":
-        rules   = get_alert_rules(dataset_id, owner=request.user)
-        history = get_alert_history(dataset_id, owner=request.user, limit=20)
-        return JsonResponse({"rules": rules, "recent_alerts": history}, status=200)
-
-    # POST — create rule (analyst/admin only)
-    role_err = _require_analyst(request)
-    if role_err:
-        return role_err
-
-    try:
-        body = json.loads(request.body)
-    except (ValueError, KeyError):
-        return JsonResponse({"error": "Invalid JSON body."}, status=400)
-
-    rule = create_alert_rule(dataset_id, owner=request.user, data=body)
-    return JsonResponse({"rule": rule}, status=201)
-
-
-@login_required
-@require_http_methods(["PUT", "PATCH", "DELETE"])
-def alert_rule_detail_view(request: HttpRequest, dataset_id: int, rule_id: int) -> JsonResponse:
-    """
-    PUT/PATCH /logs/datasets/<id>/alerts/<rule_id>/  — update a rule.
-    DELETE    /logs/datasets/<id>/alerts/<rule_id>/  — delete a rule.
-    """
-    role_err = _require_analyst(request)
-    if role_err:
-        return role_err
-    _get_user_dataset(request, dataset_id)
-
-    # Verify the rule belongs to this user.
-    get_object_or_404(AlertRule, pk=rule_id, owner=request.user, dataset_id=dataset_id)
-
-    if request.method == "DELETE":
-        delete_alert_rule(rule_id, owner=request.user)
-        return JsonResponse({"deleted": True, "rule_id": rule_id}, status=200)
-
-    try:
-        body = json.loads(request.body)
-    except (ValueError, KeyError):
-        return JsonResponse({"error": "Invalid JSON body."}, status=400)
-
-    rule = update_alert_rule(rule_id, owner=request.user, data=body)
-    return JsonResponse({"rule": rule}, status=200)
-
-
-@login_required
-@require_http_methods(["POST"])
-def alerts_check_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
-    """
-    POST /logs/datasets/<id>/alerts/check/
-
-    Evaluate all active rules and create Alert records for any that fire.
-    Returns the newly-triggered alerts (empty list if none fired).
-    """
-    dataset = _get_user_dataset(request, dataset_id)
-    error = _dataset_ready_or_error(dataset)
-    if error:
-        return error
-
-    triggered = check_and_trigger_alerts(dataset_id, owner=request.user)
-    return JsonResponse({"triggered": triggered, "count": len(triggered)}, status=200)
-
-
-@login_required
-@require_GET
-def alert_history_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
-    """
-    GET /logs/datasets/<id>/alerts/history/
-
-    Return recent alert instances for the dataset (newest first).
-    """
-    _get_user_dataset(request, dataset_id)
-    limit   = min(_parse_int_param(request, "limit", 50), 200)
-    history = get_alert_history(dataset_id, owner=request.user, limit=limit)
-    return JsonResponse({"alerts": history, "count": len(history)}, status=200)
-
-
-@login_required
-@require_GET
-def auto_alerts_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
-    """
-    GET /logs/datasets/<id>/alerts/auto/
-
-    Run the two built-in smart health checks (error rate + traffic spike)
-    without requiring user-defined rules. Returns results immediately.
-    """
-    dataset = _get_user_dataset(request, dataset_id)
-    error   = _dataset_ready_or_error(dataset)
-    if error:
-        return error
-
-    data = auto_check_alerts(dataset_id, owner=request.user)
-    return JsonResponse(data, status=200)
-
-
-# ---------------------------------------------------------------------------
 # Report generation views
 # ---------------------------------------------------------------------------
 
@@ -1000,262 +859,3 @@ def notifications_delete_all_view(request: HttpRequest) -> JsonResponse:
 
 
 # ---------------------------------------------------------------------------
-# Log simulator view  (Module 6)
-# ---------------------------------------------------------------------------
-
-
-def _require_analyst(request):
-    """Return a 403 JsonResponse if the user is not admin or analyst, else None."""
-    from logs.services.rbac import get_or_create_profile
-    try:
-        role = get_or_create_profile(request.user).role
-        if role not in ("admin", "analyst"):
-            return JsonResponse({"error": "You need Analyst or Admin access to perform this action."}, status=403)
-    except Exception:
-        return JsonResponse({"error": "Role check failed."}, status=403)
-    return None
-
-
-@login_required
-@require_POST
-def simulate_logs_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
-    """
-    POST /logs/datasets/<id>/simulate/
-
-    Generate synthetic log entries and append them to the dataset.
-
-    Query parameters
-    ----------------
-    count : int — number of entries to generate (default 10, max 50)
-    """
-    err = _require_analyst(request)
-    if err:
-        return err
-    _get_user_dataset(request, dataset_id)
-
-    count = min(_parse_int_param(request, "count", 10), 50)
-
-    from logs.services.simulator import generate_log_entries
-    from logs.services.alerts import auto_check_alerts
-    try:
-        data = generate_log_entries(dataset_id, owner=request.user, count=count)
-    except Exception as exc:
-        return JsonResponse({"error": str(exc)}, status=400)
-
-    # Run health check after ingestion so alerts fire automatically.
-    try:
-        check = auto_check_alerts(dataset_id, owner=request.user)
-        data["alert_status"] = check.get("status", "ok")
-    except Exception:
-        data["alert_status"] = "ok"
-
-    return JsonResponse(data, status=201)
-
-
-@login_required
-@require_POST
-def simulate_error_spike_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
-    """POST /logs/datasets/<id>/simulate/error-spike/ — inject high-error entries."""
-    err = _require_analyst(request)
-    if err:
-        return err
-    dataset = _get_user_dataset(request, dataset_id)
-    error   = _dataset_ready_or_error(dataset)
-    if error:
-        return error
-
-    from logs.services.simulator import simulate_error_spike
-    from logs.services.alerts import auto_check_alerts
-    try:
-        data  = simulate_error_spike(dataset_id, owner=request.user)
-        check = auto_check_alerts(dataset_id, owner=request.user)
-        data["alert_status"] = check.get("status", "ok")
-        data["alert_results"] = check.get("results", [])
-    except Exception as exc:
-        return JsonResponse({"error": str(exc)}, status=400)
-
-    return JsonResponse(data, status=201)
-
-
-@login_required
-@require_POST
-def simulate_traffic_spike_view(request: HttpRequest, dataset_id: int) -> JsonResponse:
-    """POST /logs/datasets/<id>/simulate/traffic-spike/ — inject burst entries."""
-    err = _require_analyst(request)
-    if err:
-        return err
-    dataset = _get_user_dataset(request, dataset_id)
-    error   = _dataset_ready_or_error(dataset)
-    if error:
-        return error
-
-    from logs.services.simulator import simulate_traffic_spike
-    from logs.services.alerts import auto_check_alerts
-    try:
-        data  = simulate_traffic_spike(dataset_id, owner=request.user)
-        check = auto_check_alerts(dataset_id, owner=request.user)
-        data["alert_status"] = check.get("status", "ok")
-        data["alert_results"] = check.get("results", [])
-    except Exception as exc:
-        return JsonResponse({"error": str(exc)}, status=400)
-
-    return JsonResponse(data, status=201)
-
-
-@login_required
-@require_GET
-def simulate_download_view(request: HttpRequest, dataset_id: int) -> HttpResponse:
-    """GET /logs/datasets/<id>/simulate/download/ — download simulated entries as CSV."""
-    import csv
-    _get_user_dataset(request, dataset_id)
-
-    from logs.models import LogEntry
-    entries = (
-        LogEntry.objects
-        .filter(
-            dataset_id=dataset_id,
-            dataset__owner=request.user,
-            user_agent__startswith="LogSight-Simulator",
-        )
-        .order_by("-timestamp")[:5000]
-    )
-
-    response = HttpResponse(content_type="text/csv")
-    response["Content-Disposition"] = f'attachment; filename="simulated_logs_{dataset_id}.csv"'
-
-    writer = csv.writer(response)
-    writer.writerow(["timestamp", "method", "endpoint", "status_code", "ip_address", "response_size"])
-    for e in entries:
-        writer.writerow([
-            e.timestamp.isoformat(),
-            e.method,
-            e.endpoint,
-            e.status_code,
-            e.ip_address,
-            e.response_size or "",
-        ])
-
-    return response
-
-
-@login_required
-@require_GET
-def all_alerts_history_view(request: HttpRequest) -> JsonResponse:
-    """GET /logs/alerts/all-history/ — return triggered alerts across all datasets."""
-    from logs.services.alerts import get_all_alert_history
-    limit   = min(_parse_int_param(request, "limit", 100), 500)
-    history = get_all_alert_history(owner=request.user, limit=limit)
-    return JsonResponse({"alerts": history, "count": len(history)}, status=200)
-
-
-# ---------------------------------------------------------------------------
-# RBAC admin views  (Module 7)
-# ---------------------------------------------------------------------------
-
-
-@login_required
-@require_http_methods(["GET", "POST"])
-def invites_view(request: HttpRequest) -> JsonResponse:
-    """
-    GET  /logs/invites/  — list all invites (admin only).
-    POST /logs/invites/  — create a new invite (admin only).
-    """
-    from logs.services.rbac import get_or_create_profile
-    from logs.services.invites import create_invite, list_invites
-
-    profile = get_or_create_profile(request.user)
-    if not profile.is_admin:
-        return JsonResponse({"error": "Admin access required."}, status=403)
-
-    if request.method == "GET":
-        return JsonResponse({"invites": list_invites(request.user)}, status=200)
-
-    try:
-        body = json.loads(request.body)
-    except (ValueError, KeyError):
-        return JsonResponse({"error": "Invalid JSON."}, status=400)
-
-    email = (body.get("email") or "").strip().lower()
-    role  = body.get("role", "analyst")
-
-    send_email = bool(body.get("send_email", True))
-
-    if send_email and not email:
-        return JsonResponse({"error": "Email is required when sending an email invite."}, status=400)
-    if role not in ("analyst", "viewer"):
-        return JsonResponse({"error": "Role must be analyst or viewer."}, status=400)
-
-    try:
-        invite = create_invite(email=email or None, role=role, invited_by=request.user, send_email=send_email)
-    except Exception as exc:
-        return JsonResponse({"error": str(exc)}, status=400)
-
-    return JsonResponse({"invite": invite}, status=201)
-
-
-@login_required
-@require_http_methods(["DELETE", "POST"])
-def revoke_invite_view(request: HttpRequest, invite_id: int) -> JsonResponse:
-    """
-    DELETE /logs/invites/<id>/  — revoke an unused invite (admin only).
-    """
-    from logs.services.rbac import get_or_create_profile
-    from logs.services.invites import revoke_invite
-
-    profile = get_or_create_profile(request.user)
-    if not profile.is_admin:
-        return JsonResponse({"error": "Admin access required."}, status=403)
-
-    revoked = revoke_invite(invite_id, admin_user=request.user)
-    if not revoked:
-        return JsonResponse({"error": "Invite not found or already used."}, status=404)
-    return JsonResponse({"revoked": True, "invite_id": invite_id}, status=200)
-
-
-@login_required
-@require_GET
-def user_management_view(request: HttpRequest) -> JsonResponse:
-    """
-    GET /logs/admin/users/
-
-    Return all users with their profiles.  Admin only.
-    """
-    from logs.services.rbac import get_all_users_with_profiles, get_or_create_profile
-
-    profile = get_or_create_profile(request.user)
-    if not profile.is_admin:
-        return JsonResponse({"error": "Admin access required."}, status=403)
-
-    users = get_all_users_with_profiles()
-    return JsonResponse({"users": users, "count": len(users)}, status=200)
-
-
-@login_required
-@require_POST
-def assign_role_view(request: HttpRequest, user_id: int) -> JsonResponse:
-    """
-    POST /logs/admin/users/<user_id>/role/
-
-    Assign a role to a user.  Body: {"role": "analyst"}  Admin only.
-    """
-    from logs.services.rbac import assign_role
-
-    try:
-        body = json.loads(request.body)
-    except (ValueError, KeyError):
-        return JsonResponse({"error": "Invalid JSON body."}, status=400)
-
-    role = body.get("role", "").strip()
-    if not role:
-        return JsonResponse({"error": "'role' field is required."}, status=400)
-
-    try:
-        profile = assign_role(user_id, role, requesting_user=request.user)
-    except PermissionError as exc:
-        return JsonResponse({"error": str(exc)}, status=403)
-    except ValueError as exc:
-        return JsonResponse({"error": str(exc)}, status=400)
-    except Exception as exc:
-        return JsonResponse({"error": str(exc)}, status=404)
-
-    return JsonResponse({"profile": profile}, status=200)

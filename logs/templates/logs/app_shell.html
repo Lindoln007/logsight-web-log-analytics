@@ -26,7 +26,6 @@
       };
     </script>
     <link rel="stylesheet" href="css/styles.css?v=20260528-v2" />
-    <script>window.LOGSIGHT_USER_ROLE = "{{ user_role }}";</script>
   </head>
   <body class="h-full min-h-screen bg-slate-50 text-slate-900 antialiased">
     {% if messages %}
@@ -74,15 +73,7 @@
             <div class="top-nav-group" data-nav-item data-nav-section="monitoring">
               <button type="button" class="top-nav-link" aria-haspopup="true">Monitoring</button>
               <div class="nav-dropdown">
-                <a href="{% url 'coming-soon' %}?module=alerts" data-coming-soon="alerts">Alerts<span>Health checks and thresholds</span></a>
                 <a href="{% url 'coming-soon' %}?module=security-insights" data-coming-soon="security-insights">Security Insights<span>Threats and anomalous IPs</span></a>
-                <a href="{% url 'coming-soon' %}?module=live-ingestion" data-coming-soon="live-ingestion">Live Ingestion<span>Simulate real-time log data</span></a>
-              </div>
-            </div>
-            <div id="nav-admin-group" class="top-nav-group hidden" data-nav-item data-nav-section="admin">
-              <button type="button" class="top-nav-link" aria-haspopup="true">Admin</button>
-              <div class="nav-dropdown nav-dropdown--compact">
-                <a href="{% url 'coming-soon' %}?module=user-management" data-coming-soon="user-management">User Management<span>Roles and access control</span></a>
               </div>
             </div>
           </nav>
@@ -134,11 +125,7 @@
           <a href="#/search" data-route="search">Advanced Search</a>
           <a href="#/reports" data-route="reports">Reports</a>
           <p>Monitoring</p>
-          <a href="{% url 'coming-soon' %}?module=alerts" data-coming-soon="alerts">Alerts</a>
           <a href="{% url 'coming-soon' %}?module=security-insights" data-coming-soon="security-insights">Security Insights</a>
-          <a href="{% url 'coming-soon' %}?module=live-ingestion" data-coming-soon="live-ingestion">Live Ingestion</a>
-          <p id="mobile-admin-label" class="hidden">Admin</p>
-          <a id="mobile-admin-users" href="{% url 'coming-soon' %}?module=user-management" data-coming-soon="user-management" class="hidden">User Management</a>
         </div>
       </header>
 
@@ -298,29 +285,24 @@
           <!-- Upload                                                        -->
           <!-- ============================================================ -->
           <section data-view="upload" class="hidden max-w-3xl space-y-6">
-            <!-- Viewer restriction notice (shown by JS for read-only roles) -->
-            <div id="upload-restricted" class="hidden rounded-2xl border border-amber-200/80 bg-amber-50 px-5 py-6 text-center dark:border-amber-800/30 dark:bg-amber-950/20">
-              <p class="text-sm font-medium text-amber-700 dark:text-amber-300">You have view-only access.</p>
-              <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">Uploading log files requires Analyst or Admin access. Contact your admin to request elevated permissions.</p>
-            </div>
             <div id="upload-content">
-            <div
-              id="drop-zone"
-              class="group cursor-pointer rounded-2xl border-2 border-dashed border-slate-300 bg-white/50 p-10 text-center transition-all hover:border-indigo-400 hover:bg-indigo-50/30 dark:border-slate-600 dark:bg-slate-900/40 dark:hover:border-indigo-500 dark:hover:bg-indigo-950/20"
-            >
-              <input id="file-input" type="file" accept=".log,.txt,.gz,text/plain,application/gzip" class="hidden" multiple />
-              <div class="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-100 text-indigo-600 transition group-hover:scale-105 dark:bg-indigo-950/60 dark:text-indigo-400">
-                <svg class="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
+              <div
+                id="drop-zone"
+                class="group cursor-pointer rounded-2xl border-2 border-dashed border-slate-300 bg-white/50 p-10 text-center transition-all hover:border-indigo-400 hover:bg-indigo-50/30 dark:border-slate-600 dark:bg-slate-900/40 dark:hover:border-indigo-500 dark:hover:bg-indigo-950/20"
+              >
+                <input id="file-input" type="file" accept=".log,.txt,.gz,text/plain,application/gzip" class="hidden" multiple />
+                <div class="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-100 text-indigo-600 transition group-hover:scale-105 dark:bg-indigo-950/60 dark:text-indigo-400">
+                  <svg class="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
+                </div>
+                <p class="mt-4 text-lg font-semibold text-slate-900 dark:text-white">Drop log files here</p>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">or click to browse — Apache / Nginx access logs</p>
+                <p id="upload-hint" class="mt-4 text-xs text-slate-400">Select one or more log files to upload.</p>
               </div>
-              <p class="mt-4 text-lg font-semibold text-slate-900 dark:text-white">Drop log files here</p>
-              <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">or click to browse — Apache / Nginx access logs</p>
-              <p id="upload-hint" class="mt-4 text-xs text-slate-400">Select one or more log files to upload.</p>
+              <div>
+                <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Upload queue</h2>
+                <div id="upload-queue" class="mt-3 space-y-3"></div>
+              </div>
             </div>
-            <div>
-              <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Upload queue</h2>
-              <div id="upload-queue" class="mt-3 space-y-3"></div>
-            </div>
-            </div><!-- /upload-content -->
           </section>
 
           <!-- ============================================================ -->
@@ -612,55 +594,6 @@
           </section>
 
           <!-- ============================================================ -->
-          <!-- Alerts                                                        -->
-          <!-- ============================================================ -->
-          <section data-view="alerts" class="hidden space-y-6">
-            <p class="text-sm text-slate-600 dark:text-slate-400">Select a dataset and run a health check. LogSight automatically checks for high error rates and unusual traffic spikes — no configuration needed.</p>
-
-            <!-- Dataset selector + Run Check -->
-            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-                Dataset
-                <select id="alerts-dataset" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
-                  <option value="">Select…</option>
-                </select>
-              </label>
-              <button type="button" id="alerts-check" class="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:bg-indigo-500">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                Run Health Check
-              </button>
-            </div>
-
-            <!-- Overall status banner -->
-            <div id="alerts-status-banner" class="hidden rounded-2xl border px-5 py-4">
-              <p id="alerts-status-text" class="text-sm font-semibold"></p>
-            </div>
-
-            <!-- Check result cards -->
-            <div id="alerts-results" class="hidden grid gap-4 sm:grid-cols-2"></div>
-
-            <!-- Thresholds info -->
-            <div class="rounded-2xl border border-slate-200/80 bg-slate-50 p-5 dark:border-slate-800 dark:bg-slate-900/40">
-              <h3 class="mb-2 text-sm font-semibold text-slate-700 dark:text-slate-300">How checks work</h3>
-              <ul class="space-y-1.5 text-sm text-slate-600 dark:text-slate-400">
-                <li><span class="font-medium text-slate-700 dark:text-slate-300">Error Rate</span> — Warning above 10 %, Critical above 25 %.</li>
-                <li><span class="font-medium text-slate-700 dark:text-slate-300">Traffic Spike</span> — Warning when the last recorded hour is 2× the dataset average; Critical at 3×.</li>
-              </ul>
-            </div>
-
-            <!-- Triggered alert history (all datasets) -->
-            <div class="card-lift rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-              <div class="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
-                <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Triggered Alerts — All Datasets</h3>
-                <button type="button" id="alerts-history-refresh" class="text-xs text-indigo-600 hover:underline dark:text-indigo-400">Refresh</button>
-              </div>
-              <div id="alerts-history-wrap">
-                <p class="px-5 py-6 text-center text-sm text-slate-400">No alerts recorded yet.</p>
-              </div>
-            </div>
-          </section>
-
-          <!-- ============================================================ -->
           <!-- Reports                                                       -->
           <!-- ============================================================ -->
           <section data-view="reports" class="hidden space-y-6">
@@ -870,181 +803,6 @@
                 <span id="search-page-info" class="text-xs text-slate-400"></span>
                 <button type="button" id="search-next" class="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-40 dark:border-slate-700 dark:text-slate-300" disabled>Next →</button>
               </div>
-            </div>
-          </section>
-
-          <!-- ============================================================ -->
-          <!-- Live Ingestion Simulator                                      -->
-          <!-- ============================================================ -->
-          <section data-view="simulate" class="hidden space-y-6">
-            <p class="text-sm text-slate-600 dark:text-slate-400">Simulate real-time log ingestion by generating synthetic Apache/Nginx entries on demand. Useful for testing the analytics pipeline without a live server.</p>
-            <div id="simulate-restricted" class="hidden rounded-2xl border border-amber-200/80 bg-amber-50 px-5 py-6 text-center dark:border-amber-800/30 dark:bg-amber-950/20">
-              <p class="text-sm font-medium text-amber-700 dark:text-amber-300">You have view-only access.</p>
-              <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">Log simulation requires Analyst or Admin access.</p>
-            </div>
-            <div id="simulate-content">
-            <div class="flex flex-wrap items-center gap-4">
-              <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-                Target dataset
-                <select id="simulate-dataset" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
-                  <option value="">Select…</option>
-                </select>
-              </label>
-              <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-                Entries per batch
-                <input id="simulate-count" type="number" min="1" max="50" value="10" class="w-20 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
-              </label>
-              <div class="flex flex-wrap items-center gap-2">
-                <button type="button" id="simulate-once" class="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:bg-indigo-500">
-                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                  Generate Once
-                </button>
-                <button type="button" id="simulate-auto" class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
-                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                  Auto (every 3s)
-                </button>
-                <div class="h-5 w-px bg-slate-200 dark:bg-slate-700 mx-1"></div>
-                <button type="button" id="simulate-error-spike" class="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100 dark:border-red-800/50 dark:bg-red-950/30 dark:text-red-300" title="Inject mostly 4xx/5xx entries to trigger an error-rate alert">
-                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
-                  Spike Errors
-                </button>
-                <button type="button" id="simulate-traffic-spike" class="inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-700 transition hover:bg-amber-100 dark:border-amber-800/50 dark:bg-amber-950/30 dark:text-amber-300" title="Inject a burst of requests to trigger a traffic-spike alert">
-                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>
-                  Spike Traffic
-                </button>
-                <button type="button" id="simulate-download" class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300" title="Download all simulated entries for this dataset as CSV">
-                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                  Download CSV
-                </button>
-              </div>
-            </div>
-            <!-- Stats bar -->
-            <div id="simulate-stats" class="hidden grid grid-cols-3 gap-4">
-              <div class="card-lift rounded-2xl border border-slate-200/80 bg-white p-4 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-                <p class="text-xs text-slate-500 dark:text-slate-400">Total generated</p>
-                <p id="simulate-total" class="mt-1 text-xl font-bold text-slate-900 dark:text-white">0</p>
-              </div>
-              <div class="card-lift rounded-2xl border border-slate-200/80 bg-white p-4 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-                <p class="text-xs text-slate-500 dark:text-slate-400">Last batch</p>
-                <p id="simulate-last" class="mt-1 text-xl font-bold text-slate-900 dark:text-white">—</p>
-              </div>
-              <div class="card-lift rounded-2xl border border-slate-200/80 bg-white p-4 shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-                <p class="text-xs text-slate-500 dark:text-slate-400">Status</p>
-                <p id="simulate-status" class="mt-1 text-sm font-semibold text-slate-900 dark:text-white">Idle</p>
-              </div>
-            </div>
-            <!-- Live feed -->
-            <div class="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-              <div class="border-b border-slate-200 px-5 py-3 dark:border-slate-800">
-                <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Live Feed</h3>
-              </div>
-            <div id="simulate-feed" class="log-scroll h-72 overflow-y-auto p-4 font-mono text-xs text-slate-600 dark:text-slate-400">
-                <p class="text-slate-400">Waiting for log entries…</p>
-              </div>
-            </div>
-            </div><!-- /simulate-content -->
-          </section>
-
-          <!-- ============================================================ -->
-          <!-- User Management (Admin only)                                 -->
-          <!-- ============================================================ -->
-          <section data-view="users" class="hidden space-y-6">
-            <p class="text-sm text-slate-600 dark:text-slate-400">Manage user accounts and assign roles. New users must be invited — they cannot self-register.</p>
-
-            <!-- Invite form -->
-            <div id="users-invite-wrap" class="card-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900/60 space-y-5">
-              <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Add a new user</h3>
-
-              <!-- Option A: Send email invite -->
-              <div class="rounded-xl border border-slate-200/80 p-4 dark:border-slate-700/60">
-                <p class="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Send email invite</p>
-                <div class="flex flex-wrap items-end gap-3">
-                  <label class="block flex-1 min-w-48">
-                    <span class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Email address</span>
-                    <input id="invite-email" type="email" placeholder="colleague@example.com"
-                      class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
-                  </label>
-                  <label class="block">
-                    <span class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Role</span>
-                    <select id="invite-role-email" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
-                      <option value="analyst">Analyst</option>
-                      <option value="viewer">Viewer</option>
-                    </select>
-                  </label>
-                  <button type="button" id="invite-send-email" class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
-                    Send Email
-                  </button>
-                </div>
-              </div>
-
-              <!-- Option B: Generate token (no email needed) -->
-              <div class="rounded-xl border border-slate-200/80 p-4 dark:border-slate-700/60">
-                <p class="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Generate invite token</p>
-                <p class="mb-3 text-xs text-slate-500 dark:text-slate-400">No email required — copy the token and share it manually. The invitee enters their own details when they register.</p>
-                <div class="flex items-end gap-3">
-                  <label class="block">
-                    <span class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Role</span>
-                    <select id="invite-role-token" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
-                      <option value="analyst">Analyst</option>
-                      <option value="viewer">Viewer</option>
-                    </select>
-                  </label>
-                  <button type="button" id="invite-generate-token" class="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-3 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:bg-indigo-500">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" /></svg>
-                    Generate Token
-                  </button>
-                </div>
-              </div>
-
-              <div id="invite-msg" class="hidden"></div>
-              <p id="invite-err" class="mt-1 hidden text-xs text-red-600 dark:text-red-400"></p>
-            </div>
-
-            <!-- Pending invites -->
-            <div id="invites-wrap" class="hidden card-lift rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-              <div class="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
-                <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Pending Invites</h3>
-              </div>
-              <div id="invites-list" class="divide-y divide-slate-100 dark:divide-slate-800"></div>
-            </div>
-
-            <!-- Role legend -->
-            <div class="flex flex-wrap gap-3">
-              <span class="inline-flex items-center gap-1.5 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700 dark:border-indigo-800/40 dark:bg-indigo-950/20 dark:text-indigo-300">Admin — full access</span>
-              <span class="inline-flex items-center gap-1.5 rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-xs font-medium text-cyan-700 dark:border-cyan-800/40 dark:bg-cyan-950/20 dark:text-cyan-300">Analyst — upload &amp; analyse own data</span>
-              <span class="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-600 dark:border-slate-700 dark:bg-slate-800/40 dark:text-slate-300">Viewer — read-only dashboards</span>
-              <span class="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700 dark:border-amber-800/40 dark:bg-amber-950/20 dark:text-amber-300">Pending — awaiting role assignment</span>
-            </div>
-
-            <!-- Users table -->
-            <div class="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900/60">
-              <div class="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
-                <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">All Users</h3>
-                <button type="button" id="users-refresh" class="text-xs text-indigo-600 hover:underline dark:text-indigo-400">Refresh</button>
-              </div>
-              <div class="log-scroll overflow-x-auto">
-                <table class="min-w-full text-left text-sm">
-                  <thead class="border-b border-slate-200 bg-slate-50/80 dark:border-slate-800 dark:bg-slate-800/30">
-                    <tr>
-                      <th class="whitespace-nowrap px-5 py-3 font-semibold text-slate-700 dark:text-slate-300">User</th>
-                      <th class="whitespace-nowrap px-5 py-3 font-semibold text-slate-700 dark:text-slate-300">Email</th>
-                      <th class="whitespace-nowrap px-5 py-3 font-semibold text-slate-700 dark:text-slate-300">Joined</th>
-                      <th class="whitespace-nowrap px-5 py-3 font-semibold text-slate-700 dark:text-slate-300">Role</th>
-                      <th class="whitespace-nowrap px-5 py-3 font-semibold text-slate-700 dark:text-slate-300">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody id="users-body" class="divide-y divide-slate-100 dark:divide-slate-800">
-                    <tr><td colspan="5" class="px-5 py-8 text-center text-sm text-slate-400">Loading…</td></tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            <!-- Non-admin fallback -->
-            <div id="users-no-access" class="hidden rounded-2xl border border-amber-200/80 bg-amber-50 px-5 py-8 text-center dark:border-amber-800/30 dark:bg-amber-950/20">
-              <p class="text-sm font-medium text-amber-700 dark:text-amber-300">You need the Admin role to manage users.</p>
-              <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">Contact your system administrator to request elevated access.</p>
             </div>
           </section>
 

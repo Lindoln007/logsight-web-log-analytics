@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-from django.contrib import admin
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import render
 from django.urls import include, path
@@ -13,26 +12,15 @@ FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
 
 def serve_frontend_index(request):
-    from logs.services.rbac import get_or_create_profile
-    try:
-        profile = get_or_create_profile(request.user)
-        user_role = profile.role
-    except Exception:
-        user_role = "pending"
-
-    if user_role == "pending":
-        return render(request, "accounts/pending.html")
-
     # Load the ML libraries in the background while the user is on the
     # dashboard, so the first forecast / anomaly run does not wait for them.
     from logs.services.ml_runtime import warm_up
     warm_up()
 
-    return render(request, "logs/app_shell.html", {"user_role": user_role})
+    return render(request, "logs/app_shell.html")
 
 
 urlpatterns = [
-    path("admin/", admin.site.urls),
     path("accounts/", include("accounts.urls")),
     path("coming-soon/", log_views.coming_soon_view, name="coming-soon"),
     path("logs/", include("logs.urls")),

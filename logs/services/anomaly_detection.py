@@ -282,7 +282,7 @@ def _detect_error_rate_spikes(hours: list[dict], k: float) -> list[dict]:
         return []
 
     upper = mean + k * std
-    # Suppress alerts when the threshold itself is below a meaningful baseline.
+    # Ignore thresholds below a meaningful baseline.
     if upper < 1.0:
         return []
 
