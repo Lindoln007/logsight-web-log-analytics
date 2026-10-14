@@ -1,49 +1,107 @@
 <!DOCTYPE html>
-<html lang="en" class="h-full">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{% block title %}LogSight{% endblock %}</title>
     <link rel="icon" type="image/png" href="/assets/logsight-logo.png?v=20260330c" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
     <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="/css/styles.css?v=20260330b" />
+    <link rel="stylesheet" href="/css/styles.css?v=20260514a" />
   </head>
-  <body class="min-h-screen bg-slate-100 text-slate-900 antialiased">
-    <div class="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(99,102,241,0.14),_transparent_42%),linear-gradient(180deg,_#f8fafc_0%,_#eef2ff_100%)]">
-      <header class="mx-auto flex w-full max-w-6xl items-center justify-between px-6 py-5">
-        <a href="/" class="flex items-center gap-3 text-slate-900">
-          <span class="brand-mark-shell shrink-0">
-            <img src="/assets/logsight-logo.png?v=20260330c" alt="" class="brand-mark-image" />
-          </span>
-          <span class="text-lg font-semibold">LogSight</span>
-        </a>
-        <nav class="flex items-center gap-3 text-sm">
-          {% if user.is_authenticated %}
-            <a href="{% url 'accounts:profile' %}" class="rounded-lg px-3 py-2 text-slate-700 transition hover:bg-white/70">Profile</a>
-            <form method="post" action="{% url 'accounts:logout' %}">
-              {% csrf_token %}
-              <button type="submit" class="rounded-lg bg-slate-900 px-4 py-2 font-medium text-white transition hover:bg-slate-800">Logout</button>
-            </form>
-          {% else %}
-            <a href="{% url 'accounts:login' %}" class="rounded-lg px-3 py-2 text-slate-700 transition hover:bg-white/70">Login</a>
-            <a href="{% url 'accounts:register' %}" class="rounded-lg bg-slate-900 px-4 py-2 font-medium text-white transition hover:bg-slate-800">Create account</a>
-          {% endif %}
-        </nav>
-      </header>
-      <main class="mx-auto flex min-h-[calc(100vh-88px)] w-full max-w-6xl items-center justify-center px-6 py-10">
-        <div class="w-full max-w-md rounded-3xl border border-white/60 bg-white/85 p-8 shadow-2xl shadow-slate-300/40 backdrop-blur">
+  <body>
+    <div class="ls-auth-root">
+
+      <!-- ══ Left visual panel ══════════════════════════════════ -->
+      <div class="ls-auth-visual">
+        <div class="ls-auth-visual-bg"></div>
+
+        <!-- Brand mark top-left -->
+        <div class="ls-auth-brand-top">
+          <a href="/" style="display:inline-flex;align-items:center;gap:10px;text-decoration:none;">
+            <span style="width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#091628,#1a3a72);border:1px solid rgba(0,212,255,0.3);box-shadow:0 0 14px rgba(0,212,255,0.18);display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0;">
+              <img src="/assets/logsight-logo.png?v=20260330c" alt="" style="width:220%;max-width:none;height:100%;object-fit:cover;object-position:left center;transform:translateX(-1px);" />
+            </span>
+            <span style="font-size:0.9rem;font-weight:700;letter-spacing:-0.04em;">
+              <span style="color:#00d4ff;">Log</span><span style="color:#e8f2ff;">Sight</span>
+            </span>
+          </a>
+        </div>
+
+        <!-- Scrolling log stream -->
+        <div class="ls-log-stream" aria-hidden="true">
+          <div class="ls-log-stream-inner" id="ls-stream-inner">
+            <!-- Lines injected by inline script below; duplicated for seamless loop -->
+          </div>
+        </div>
+
+        <!-- Tagline bottom-left -->
+        <div class="ls-auth-tagline">
+          <p class="ls-auth-tagline-title">Intelligence<br/>from every line.</p>
+          <p class="ls-auth-tagline-sub">Upload your server logs and instantly surface traffic patterns, error rates, and anomalies — no configuration needed.</p>
+        </div>
+      </div>
+
+      <!-- ══ Right form panel ═══════════════════════════════════ -->
+      <div class="ls-auth-form-side">
+        <div class="ls-auth-form-card">
+
           {% if messages %}
-            <div class="mb-4 space-y-2">
-              {% for message in messages %}
-                <div class="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-700">
-                  {{ message }}
-                </div>
-              {% endfor %}
-            </div>
+            {% for message in messages %}
+              <div class="ls-auth-msg">{{ message }}</div>
+            {% endfor %}
           {% endif %}
+
           {% block content %}{% endblock %}
         </div>
-      </main>
+      </div>
     </div>
+
+    <!-- Log stream animation script -->
+    <script>
+    (function () {
+      var lines = [
+        { cls: 'ls-log-ok',   txt: '10.0.1.14 - - [14/May/2026:09:01:02 +0000] "GET /api/health HTTP/1.1" 200 24' },
+        { cls: '',            txt: '192.168.0.55 - - [14/May/2026:09:01:05 +0000] "GET /static/js/app.js HTTP/1.1" 304 0' },
+        { cls: 'ls-log-ok',   txt: '10.0.1.22 - - [14/May/2026:09:01:07 +0000] "POST /api/auth/login HTTP/1.1" 200 412' },
+        { cls: 'ls-log-warn', txt: '203.0.113.9 - - [14/May/2026:09:01:09 +0000] "GET /admin HTTP/1.1" 403 188' },
+        { cls: 'ls-log-ok',   txt: '10.0.1.18 - - [14/May/2026:09:01:11 +0000] "GET /api/datasets HTTP/1.1" 200 1842' },
+        { cls: '',            txt: '192.168.1.2 - - [14/May/2026:09:01:13 +0000] "GET /css/styles.css HTTP/1.1" 304 0' },
+        { cls: 'ls-log-err',  txt: '198.51.100.4 - - [14/May/2026:09:01:15 +0000] "GET /api/missing HTTP/1.1" 404 96' },
+        { cls: 'ls-log-ok',   txt: '10.0.1.14 - - [14/May/2026:09:01:17 +0000] "GET /api/users HTTP/1.1" 200 3210' },
+        { cls: 'ls-log-info', txt: '10.0.1.30 - - [14/May/2026:09:01:19 +0000] "GET /moved HTTP/1.1" 301 0' },
+        { cls: 'ls-log-ok',   txt: '172.16.0.8 - - [14/May/2026:09:01:22 +0000] "POST /api/upload HTTP/1.1" 201 588' },
+        { cls: 'ls-log-err',  txt: '198.51.100.7 - - [14/May/2026:09:01:24 +0000] "POST /api/submit HTTP/1.1" 500 231' },
+        { cls: 'ls-log-ok',   txt: '10.0.1.22 - - [14/May/2026:09:01:26 +0000] "GET /api/analytics/summary HTTP/1.1" 200 9847' },
+        { cls: '',            txt: '192.168.0.55 - - [14/May/2026:09:01:28 +0000] "GET /favicon.ico HTTP/1.1" 200 318' },
+        { cls: 'ls-log-warn', txt: '203.0.113.12 - - [14/May/2026:09:01:30 +0000] "GET /wp-login.php HTTP/1.1" 404 122' },
+        { cls: 'ls-log-ok',   txt: '10.0.1.18 - - [14/May/2026:09:01:32 +0000] "DELETE /api/datasets/42 HTTP/1.1" 204 0' },
+        { cls: 'ls-log-ok',   txt: '172.16.0.10 - - [14/May/2026:09:01:35 +0000] "GET /api/logs?page=2 HTTP/1.1" 200 14420' },
+        { cls: 'ls-log-err',  txt: '198.51.100.4 - - [14/May/2026:09:01:37 +0000] "GET /api/secret HTTP/1.1" 401 88' },
+        { cls: 'ls-log-ok',   txt: '10.0.1.14 - - [14/May/2026:09:01:40 +0000] "PUT /api/profile HTTP/1.1" 200 724' },
+        { cls: '',            txt: '192.168.1.5 - - [14/May/2026:09:01:42 +0000] "GET /api/status HTTP/1.1" 200 56' },
+        { cls: 'ls-log-warn', txt: '10.0.1.99 - - [14/May/2026:09:01:44 +0000] "GET /api/datasets?page=99 HTTP/1.1" 404 64' },
+        { cls: 'ls-log-ok',   txt: '172.16.0.8 - - [14/May/2026:09:01:46 +0000] "GET /api/analytics/trends HTTP/1.1" 200 6120' },
+        { cls: 'ls-log-err',  txt: '203.0.113.9 - - [14/May/2026:09:01:48 +0000] "POST /api/exec HTTP/1.1" 403 98' },
+        { cls: 'ls-log-ok',   txt: '10.0.1.22 - - [14/May/2026:09:01:50 +0000] "GET /api/health HTTP/1.1" 200 24' },
+        { cls: '',            txt: '192.168.0.55 - - [14/May/2026:09:01:52 +0000] "GET /static/img/logo.png HTTP/1.1" 304 0' },
+      ];
+
+      var container = document.getElementById('ls-stream-inner');
+      if (!container) return;
+
+      function makeLine(l) {
+        var p = document.createElement('p');
+        if (l.cls) p.className = l.cls;
+        p.textContent = l.txt;
+        return p;
+      }
+
+      /* Render lines twice for seamless CSS loop */
+      lines.concat(lines).forEach(function (l) { container.appendChild(makeLine(l)); });
+    })();
+    </script>
   </body>
 </html>
