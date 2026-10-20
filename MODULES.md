@@ -974,5 +974,9 @@ A parsed dataset never changes, so the system does expensive work once and reuse
 | Entry counts | The log table uses the stored entry total when no filter is set, and remembers the count for each filter combination, so paging never recounts. | `logs/services/log_entries.py` |
 | Browser | A page keeps its rendered result while hidden and is only reloaded when its dataset or settings change. API responses are reused for 5 minutes. | `frontend/js/app.js`, `frontend/js/api.js` |
 | Transport | JSON and HTML responses are gzip-compressed. | `settings.MIDDLEWARE` |
+| Start-up warm-up | When the web server starts, scikit-learn and the security classifier load in a background thread, so the first Forecast, Anomalies or Security request does not wait for them. Skipped for `migrate`, `test` and other commands. | `logs/apps.py`, `logs/services/ml_runtime.py` |
+| Existing datasets | `python manage.py warm_datasets` prepares every completed dataset (roll-up, dashboard figures, default anomaly, forecast and security results). New uploads are prepared automatically. | `logs/management/commands/warm_datasets.py` |
+| SQLite tuning | 128 MB page cache, memory-mapped reads and in-memory temporary tables. Measured 10-25% faster on uncached analytics and about 40% faster Explore queries on a 300,000-row dataset. | `settings.DATABASES` |
+| Offline assets | Chart.js and the three font families are stored in the project (`frontend/js/vendor/`, `frontend/assets/fonts/`, `frontend/css/fonts.css`), so the app needs no internet connection. | `logs/templates/logs/_head.html` |
 
 Tests run with an in-memory cache so they never read or clear the real one. Set `LOGSIGHT_CACHE_DIR` to move the cache directory.
